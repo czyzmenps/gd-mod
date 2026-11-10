@@ -25,6 +25,9 @@ endif()
 add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 
 # Raw TCP sockets are used for the connection to the collab server.
+# Net.cpp includes winsock2.h itself, which clashes with the Windows.h that is
+# baked into Geode's precompiled header, so it is compiled without that header.
+set_source_files_properties(src/Net.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 if (WIN32)
     target_link_libraries(${PROJECT_NAME} ws2_32)
 endif()
