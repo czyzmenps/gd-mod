@@ -6,6 +6,9 @@ on:
     branches:
       - "**"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Windows
@@ -24,3 +27,20 @@ jobs:
         with:
           name: Live Collab (.geode)
           path: ${{ steps.build.outputs.build-output }}
+
+      # Also publish the finished .geode as a GitHub Release so it can be
+      # downloaded with a plain link (Releases > "Live Collab (latest build)").
+      - name: Publish the .geode as a release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_OUTPUT: ${{ steps.build.outputs.build-output }}
+        run: |
+          OUT="$(cygpath -u "$BUILD_OUTPUT")"
+          FILE="$(find "$OUT" -name '*.geode' | head -n 1)"
+          echo "Publishing: $FILE"
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest "$FILE" \
+            --target "${{ github.sha }}" \
+            --title "Live Collab (latest build)" \
+            --notes "Automatic build of commit ${{ github.sha }}. Put the .geode file in %LOCALAPPDATA%\GeometryDash\geode\mods"
