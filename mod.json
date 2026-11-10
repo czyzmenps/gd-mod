@@ -1,0 +1,12 @@
+{
+	"geode": "5.11.2",
+	"gd": {
+		"win": "2.2081"
+	},
+	"id": "devcollab.live-editor",
+	"name": "Live Collab Editor",
+	"version": "v1.0.0",
+	"developer": "Collab Dev",
+	"description": "Edit one level together in real time. Several players can join the same editor session and place, delete, move and edit objects at the same time.",
+	"tags": ["editor", "online", "utility"]
+}

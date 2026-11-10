@@ -1,0 +1,14 @@
+{
+  "name": "live-collab-server",
+  "version": "1.0.0",
+  "description": "Relay server for the Live Collab Editor Geode mod",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
