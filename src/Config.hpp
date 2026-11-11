@@ -9,9 +9,10 @@
 // Everything the player can change in the mod's Config (Geode settings).
 namespace collab::cfg {
 
-    // Server that is used when the "Party server" setting is empty. Put the
-    // address of your always-on party server here (host or host:port) before
-    // building, and nobody ever has to type an address.
+    // Server that is used when the "Party server" setting is empty. Leave it
+    // empty and the host's own game is the server (no hosting needed). Put the
+    // address of an always-on party server here (host or host:port) before
+    // building if you run one - then invites by name work as well.
     inline constexpr char const* kDefaultServer = "";
 
     inline constexpr char const* kDefaultPort = "5588";
@@ -35,10 +36,10 @@ namespace collab::cfg {
         return geode::Mod::get()->getSettingValue<double>(key);
     }
 
-    // The party server: Config -> (value saved by older versions) -> built-in default.
+    // The party server: Config -> built-in default. Empty means "no server":
+    // the host's own game is the server for the party.
     inline std::string server() {
         std::string s = text("server");
-        if (s.empty()) s = trimmed(geode::Mod::get()->getSavedValue<std::string>("server", ""));
         if (s.empty()) s = trimmed(kDefaultServer);
         return s;
     }

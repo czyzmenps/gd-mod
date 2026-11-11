@@ -29,6 +29,8 @@ protected:
 
     // ---- party view (not in a party) ----
     cocos2d::CCNode* m_connectView = nullptr;
+    cocos2d::CCLabelBMFont* m_startNote = nullptr;
+    std::string m_shownNote;
     geode::TextInput* m_codeInput = nullptr;
     CCMenuItemSpriteExtra* m_startBtn = nullptr;
     CCMenuItemSpriteExtra* m_joinBtn = nullptr;

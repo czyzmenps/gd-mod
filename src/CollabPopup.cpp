@@ -142,12 +142,13 @@ void CollabPopup::buildConnectView() {
     );
     m_buttonMenu->addChildAtPosition(m_startBtn, Anchor::Center, ccp(0.f, 58.f));
 
-    auto startNote = makeLabel(
-        "Creates a new party and copies its code for your friends", "chatFont.fnt", .5f, 170, { .5f, .5f }
-    );
-    fitLabel(startNote, 340.f, .5f);
-    startNote->setPosition(at(0.f, 28.f));
-    m_connectView->addChild(startNote);
+    // one or two lines: what Start does, or what went wrong (wraps at 340 px)
+    m_startNote = CCLabelBMFont::create("", "chatFont.fnt", 680.f, kCCTextAlignmentCenter);
+    m_startNote->setScale(.5f);
+    m_startNote->setOpacity(170);
+    m_startNote->setAnchorPoint({ .5f, 1.f });
+    m_startNote->setPosition(at(0.f, 40.f));
+    m_connectView->addChild(m_startNote);
 
     // joining a friend's party
     auto joinCaption = makeLabel("JOIN A PARTY", "bigFont.fnt", .3f, 160, { 0.f, .5f });
@@ -341,6 +342,12 @@ void CollabPopup::startConnection(bool host) {
             server = collab::cfg::trimmed(code.substr(sep + 1));
             code = collab::cfg::trimmed(code.substr(0, sep));
         }
+        if (server.empty()) {
+            Notification::create(
+                "Paste the whole party code, with the part after @", NotificationIcon::Warning, 3.f
+            )->show();
+            return;
+        }
         room = code;
     }
 
@@ -362,9 +369,12 @@ void CollabPopup::onLeave(CCObject*) {
 }
 
 void CollabPopup::onCopy(CCObject*) {
-    auto const& room = Manager::get().room();
-    if (room.empty()) return;
-    geode::utils::clipboard::write(Manager::get().partyCode());
+    auto const code = Manager::get().partyCode();
+    if (code.empty()) {
+        Notification::create("The party is still starting, try again in a moment", NotificationIcon::Warning, 2.f)->show();
+        return;
+    }
+    geode::utils::clipboard::write(code);
     Notification::create("Party code copied", NotificationIcon::Success, 1.f)->show();
 }
 
@@ -463,13 +473,26 @@ void CollabPopup::refreshConnectInfo() {
 
     std::string const server = collab::cfg::server();
     std::string const text = server.empty()
-        ? "No party server set - press Config and enter it once"
+        ? "Your game hosts the party - no server needed"
         : "Server: " + server;
     if (text != m_shownServer) {
         m_shownServer = text;
         m_serverLabel->setString(text.c_str());
         fitLabel(m_serverLabel, 250.f, .5f);
-        m_serverLabel->setColor(server.empty() ? ccColor3B { 255, 175, 110 } : ccColor3B { 170, 170, 170 });
+    }
+
+    // under the Start button: what it does, or what went wrong last time
+    auto const& hint = Manager::get().problemHint();
+    std::string const note = !hint.empty()
+        ? hint
+        : (server.empty()
+            ? "Your PC hosts the party. Its code is copied for your friends."
+            : "Creates a new party and copies its code for your friends.");
+    if (note != m_shownNote) {
+        m_shownNote = note;
+        m_startNote->setString(note.c_str());
+        m_startNote->setColor(hint.empty() ? ccColor3B { 255, 255, 255 } : ccColor3B { 255, 175, 110 });
+        m_startNote->setOpacity(hint.empty() ? 170 : 255);
     }
 
     // the switch can also be flipped in the Config while this window is open
@@ -532,7 +555,9 @@ void CollabPopup::refreshRoomView() {
     }
 
     // which server the party runs on
-    std::string const note = manager.server().empty() ? std::string() : "on " + manager.server();
+    std::string const note = manager.hostedHere()
+        ? std::string("hosted on this PC")
+        : (manager.server().empty() ? std::string() : "on " + manager.server());
     if (note != m_shownServerNote) {
         m_shownServerNote = note;
         m_serverNote->setString(note.c_str());

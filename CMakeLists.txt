@@ -27,9 +27,14 @@ add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 # Raw TCP sockets are used for the connection to the collab server.
 # Net.cpp includes winsock2.h itself, which clashes with the Windows.h that is
 # baked into Geode's precompiled header, so it is compiled without that header.
-set_source_files_properties(src/Net.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# LocalServer.cpp (the party server inside the mod) and Upnp.cpp (opens the port
+# in the router) use the same socket headers, and the COM headers.
+set_source_files_properties(
+    src/Net.cpp src/LocalServer.cpp src/Upnp.cpp
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+)
 if (WIN32)
-    target_link_libraries(${PROJECT_NAME} ws2_32)
+    target_link_libraries(${PROJECT_NAME} ws2_32 ole32 oleaut32 uuid)
 endif()
 
 # Set up dependencies, resources, and link Geode.

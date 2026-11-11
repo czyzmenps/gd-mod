@@ -5,8 +5,10 @@
 #include "CollabHud.hpp"
 #include "CollabLauncher.hpp"
 #include "CollabOverlay.hpp"
+#include "LocalServer.hpp"
 #include "Net.hpp"
 #include "Status.hpp"
+#include "Upnp.hpp"
 
 #include <chrono>
 #include <deque>
@@ -65,7 +67,9 @@ namespace collab {
         void onSettingChanged(std::string_view key);
 
         // ---- used by the popup ----
-        // mode is "host" (create a new room) or "join" (enter an existing room)
+        // Host (host = true): with an empty `server` this game itself becomes the
+        // party server (opening the port in the router), otherwise the party is
+        // created on that server. Join (host = false): enter the room on `server`.
         void connect(std::string server, std::string room, std::string name, bool host);
         void disconnect(std::string const& reason = "Disconnected");
 
@@ -77,6 +81,10 @@ namespace collab {
         // what you send to your friends: the room code, plus "@server" when the
         // friends could not know the server themselves
         std::string partyCode() const;
+        // true while this game itself is the party server
+        bool hostedHere() const { return m_localActive; }
+        // a longer explanation of what went wrong and what to do (may be empty)
+        std::string const& problemHint() const { return m_hint; }
         int clientId() const { return m_clientId; }
         // 0..1 while the level is being uploaded / downloaded, negative when unknown
         float progress() const;
@@ -114,6 +122,13 @@ namespace collab {
         void beginDownload();
         void beginUpload();
         void setStatus(Status status, std::string text);
+
+        // the party server inside this game
+        void beginSession(bool host, std::string room, std::string name);
+        void startLocalParty(std::string room, std::string name);
+        void tickLocalParty();
+        void connectLocal();
+        void stopLocalParty();
 
         // object bookkeeping
         struct ObjInfo {
@@ -169,6 +184,16 @@ namespace collab {
         geode::Ref<CollabDot> m_badge;
         geode::Ref<SelectionOverlay> m_overlay;
         geode::Ref<CollabLauncher> m_launcher;
+
+        // the party server inside this game (used when no server is set)
+        enum class LocalStage { None, OpeningPort };
+        LocalServer m_local;
+        PortMapper m_mapper;
+        LocalStage m_localStage = LocalStage::None;
+        bool m_localActive = false;
+        int m_localPort = 0;
+        std::string m_localAddress; // "ip:port" that friends use
+        std::string m_hint;
 
         // connection state
         NetClient m_net;

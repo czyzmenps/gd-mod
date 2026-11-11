@@ -62,7 +62,7 @@ namespace collab {
                 server = server.substr(0, colon);
             }
             if (server.empty()) {
-                error = "No party server set - press Config and enter it once";
+                error = "The party code is incomplete - paste the whole code (it contains @)";
                 return false;
             }
             if (port < 1 || port > 65535) {
@@ -129,6 +129,7 @@ namespace collab {
 
     void Manager::detach() {
         m_net.close();
+        this->stopLocalParty();
         m_lobbyWanted = false;
         this->stopLobby();
         this->clearSelections();
@@ -170,7 +171,8 @@ namespace collab {
     }
 
     std::string Manager::partyCode() const {
-        if (m_room.empty()) return "";
+        // not known yet while the router is still being asked to open the port
+        if (m_room.empty() || m_localStage != LocalStage::None) return "";
         std::string const defaultServer = normalizeServer(std::string(cfg::kDefaultServer));
         if (m_serverLabel.empty() || (!defaultServer.empty() && m_serverLabel == defaultServer)) {
             return m_room;
@@ -223,11 +225,48 @@ namespace collab {
     // connection management
     // ------------------------------------------------------------------
 
+    // Forgets everything about the previous party and sets up a new one.
+    void Manager::beginSession(bool host, std::string room, std::string name) {
+        this->stopLobby();
+
+        m_remote.clear();
+        m_out.clear();
+        m_toClear.clear();
+        m_uploadList.clear();
+        m_uploading = false;
+        m_snapshotDone = false;
+        m_players.clear();
+        this->clearTracking();
+        this->clearSelections();
+
+        m_hosting = host;
+        m_room = std::move(room);
+        m_name = std::move(name);
+        m_serverLabel.clear();
+        m_clientId = 0;
+        m_counter = 0;
+        m_pingTimer = 0.f;
+        m_scanTimer = 0.f;
+        m_reconcileTimer = 0.f;
+        m_sweepPos = 0;
+        m_selCursor = 0;
+        m_prevSelection.clear();
+    }
+
     void Manager::connect(std::string server, std::string room, std::string name, bool host) {
         if (!m_ui || m_status != Status::Offline) return;
 
+        m_hint.clear();
         room = trim(room);
         name = trim(name);
+        if (name.empty()) name = "Player";
+        if (name.size() > 20) name.resize(20);
+
+        // no server: this game hosts the party itself
+        if (host && trim(server).empty()) {
+            this->startLocalParty(std::move(room), std::move(name));
+            return;
+        }
 
         std::string address;
         int port = 5588;
@@ -247,40 +286,84 @@ namespace collab {
         std::transform(room.begin(), room.end(), room.begin(), [](unsigned char c) {
             return static_cast<char>(std::toupper(c));
         });
-        if (name.empty()) name = "Player";
-        if (name.size() > 20) name.resize(20);
 
-        this->stopLobby();
-
-        m_remote.clear();
-        m_out.clear();
-        m_toClear.clear();
-        m_uploadList.clear();
-        m_uploading = false;
-        m_snapshotDone = false;
-        m_players.clear();
-        this->clearTracking();
-        this->clearSelections();
-
-        m_hosting = host;
-        m_room = room;
-        m_name = name;
+        this->beginSession(host, std::move(room), std::move(name));
         m_serverLabel = fmt::format("{}:{}", server, port);
-        m_clientId = 0;
-        m_counter = 0;
-        m_pingTimer = 0.f;
-        m_scanTimer = 0.f;
-        m_reconcileTimer = 0.f;
-        m_sweepPos = 0;
-        m_selCursor = 0;
-        m_prevSelection.clear();
 
         this->setStatus(Status::Connecting, fmt::format("Connecting to {}:{}...", server, port));
         m_net.connect(server, port);
     }
 
+    // ------------------------------------------------------------------
+    // a party hosted by this game
+    // ------------------------------------------------------------------
+
+    void Manager::startLocalParty(std::string room, std::string name) {
+        if (room.empty()) room = makeRoomCode();
+        std::transform(room.begin(), room.end(), room.begin(), [](unsigned char c) {
+            return static_cast<char>(std::toupper(c));
+        });
+
+        std::string error;
+        int const port = m_local.start(5588, error);
+        if (port == 0) {
+            this->setStatus(Status::Offline, "Could not start the party");
+            m_hint = error;
+            return;
+        }
+
+        this->beginSession(true, std::move(room), std::move(name));
+        m_localActive = true;
+        m_localPort = port;
+
+        // the address friends use, typed by the player (tunnel, manual port forwarding) ...
+        std::string manual = cfg::text("public-address");
+        if (auto pos = manual.find("://"); pos != std::string::npos) manual = manual.substr(pos + 3);
+        while (!manual.empty() && manual.back() == '/') manual.pop_back();
+        if (!manual.empty()) {
+            m_localAddress = manual.find(':') == std::string::npos ? fmt::format("{}:{}", manual, port) : manual;
+            this->connectLocal();
+            return;
+        }
+
+        // ... or found out by asking the router to open the port
+        m_mapper.open(port);
+        m_localStage = LocalStage::OpeningPort;
+        this->setStatus(Status::Connecting, fmt::format("Opening port {} in your router...", port));
+    }
+
+    void Manager::tickLocalParty() {
+        if (m_localStage != LocalStage::OpeningPort || m_mapper.working()) return;
+
+        UpnpResult const result = m_mapper.result();
+        if (!result.ok) {
+            std::string const hint = result.hint;
+            this->disconnect(result.error);
+            m_hint = hint;
+            return;
+        }
+        m_localAddress = fmt::format("{}:{}", result.address, m_localPort);
+        this->connectLocal();
+    }
+
+    // the host's own game connects to the server inside it
+    void Manager::connectLocal() {
+        m_localStage = LocalStage::None;
+        m_serverLabel = m_localAddress;
+        this->setStatus(Status::Connecting, "Starting the party...");
+        m_net.connect("127.0.0.1", m_localPort);
+    }
+
+    void Manager::stopLocalParty() {
+        m_localStage = LocalStage::None;
+        m_localActive = false;
+        m_mapper.close();
+        m_local.stop();
+    }
+
     void Manager::disconnect(std::string const& reason) {
         m_net.close();
+        this->stopLocalParty();
         m_remote.clear();
         m_out.clear();
         m_toClear.clear();
@@ -440,6 +523,11 @@ namespace collab {
             }
             else if (getStr(msg, "reason") == "slow_down") {
                 Notification::create("Wait a moment before sending another invite", NotificationIcon::Warning, 2.f)->show();
+            }
+            else if (getStr(msg, "reason") == "no_server") {
+                Notification::create(
+                    "Invites need a party server. Send your friends the party code instead.", NotificationIcon::Warning, 4.f
+                )->show();
             }
             else {
                 std::string const text = fmt::format(
@@ -992,6 +1080,7 @@ namespace collab {
 
     std::string Manager::inviteStatusText() const {
         if (!m_lobbyWanted) return "Off - friends can not invite you";
+        if (m_lobbyServer.empty()) return "Needs a party server - set one in the Config";
         switch (m_lobbyState) {
             case LobbyState::Listening: return fmt::format("Listening for invites as {}", m_lobbyName);
             case LobbyState::Connecting: return "Connecting to the server...";
@@ -1151,6 +1240,7 @@ namespace collab {
         if (!m_ui || !m_lel) return;
 
         this->tickLobby(dt);
+        this->tickLocalParty();
         for (auto const& ev : m_net.poll()) {
             this->handleEvent(ev);
         }

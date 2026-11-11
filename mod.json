@@ -7,13 +7,19 @@
 	"name": "Live Collab Editor",
 	"version": "v1.1.0",
 	"developer": "Collab Dev",
-	"description": "Start a party and build one level together in real time. Everybody in the party is in the same editor: you see each other's objects, selections and changes instantly.",
+	"description": "Start a party and build one level together in real time. Everybody in the party is in the same editor: you see each other's objects, selections and changes instantly. No server needed: your own game hosts the party.",
 	"tags": ["editor", "online", "utility"],
 	"settings": {
 		"server": {
 			"type": "string",
-			"name": "Party server",
-			"description": "Address of the party server, for example <cy>play.example.com</c> or <cy>play.example.com:5588</c> (the port is optional, 5588 by default). Everybody in a party has to use the same server. You only set this once. Leave it empty to use the server that is built into this version of the mod.",
+			"name": "Party server (optional)",
+			"description": "Leave this <cg>empty</c>: when you press Start party your own game hosts the party and nothing has to be set up. Only if somebody runs a party server (server/server.js) type its address here, for example <cy>play.example.com</c> or <cy>play.example.com:5588</c>. Invites by name need a party server.",
+			"default": ""
+		},
+		"public-address": {
+			"type": "string",
+			"name": "Public address (advanced)",
+			"description": "Only needed when the automatic port opening does not work (the window tells you). Forward TCP port <cy>5588</c> to this PC in your router, or use a tunnel such as playit.gg, and type the address friends can reach you on, for example <cy>12.34.56.78</c> or <cy>name.example.com:25565</c>. Leave it empty for automatic.",
 			"default": ""
 		},
 		"player-name": {
@@ -68,7 +74,7 @@
 		"receive-invites": {
 			"type": "bool",
 			"name": "Receive invites",
-			"description": "While you are in the editor and not in a party, stay connected to the party server so friends can invite you by your name. Needs the server and your name to be set.",
+			"description": "While you are in the editor and not in a party, stay connected to the party server so friends can invite you by your name. Only works when a party server is set above.",
 			"default": false
 		}
 	}
