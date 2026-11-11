@@ -50,23 +50,12 @@ class $modify(CollabEditorUI, EditorUI) {
         hud->setPosition({ winSize.width / 2.f, winSize.height - 4.f });
         this->addChild(hud, 100);
 
-        // the button that opens the collab window, with a status light on it
-        auto menu = CCMenu::create();
-        menu->setPosition({ 0.f, 0.f });
-        auto button = CCMenuItemSpriteExtra::create(
-            ButtonSprite::create("Collab", "bigFont.fnt", "GJ_button_01.png", .6f),
-            this, menu_selector(CollabEditorUI::onCollab)
-        );
-        button->setPosition({ 42.f, winSize.height / 2.f + 30.f });
-        menu->addChild(button);
-        this->addChild(menu, 100);
+        // the small round button in a corner (see the Config for where)
+        auto launcher = collab::CollabLauncher::create();
+        this->addChild(launcher, 100);
 
-        auto badge = collab::CollabDot::create(4.f);
-        auto const size = button->getContentSize();
-        badge->setPosition(button->getPosition() + CCPoint { size.width / 2.f - 3.f, size.height / 2.f - 3.f });
-        this->addChild(badge, 101);
-
-        collab::Manager::get().setHud(hud, badge);
+        collab::Manager::get().setHud(hud, launcher->badge());
+        collab::Manager::get().setLauncher(launcher);
 
         // outlines around what the other players have selected; z -1 keeps it
         // below the editor's own buttons and panels
@@ -76,10 +65,6 @@ class $modify(CollabEditorUI, EditorUI) {
         }
 
         return true;
-    }
-
-    void onCollab(CCObject*) {
-        CollabPopup::create()->show();
     }
 };
 
@@ -91,3 +76,17 @@ class $modify(CollabEditorLayer, LevelEditorLayer) {
         LevelEditorLayer::removeObject(object, noUndo);
     }
 };
+
+$on_mod(Loaded) {
+    // the shortcut from the Config opens / closes the window
+    listenForKeybindSettingPresses("open-key", [](Keybind const&, bool down, bool repeat, double) {
+        if (!down || repeat || !collab::Manager::get().inEditor()) return false;
+        CollabPopup::toggle();
+        return true;
+    });
+
+    // moving the button, changing the server or name, ... takes effect right away
+    listenForAllSettingChanges([](std::string_view key, std::shared_ptr<SettingV3>) {
+        collab::Manager::get().onSettingChanged(key);
+    });
+}

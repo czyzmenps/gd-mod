@@ -17,21 +17,41 @@ The mod talks to a small relay server (`server/`) that you run yourself.
 
 ## Using it
 
-1. Run the server (see below) somewhere every player can reach.
-2. In the editor click the **Collab** button on the left side of the screen. The small light on the
-   button shows the state (grey = offline, yellow = connecting, blue = syncing, green = live).
-3. The window starts in the **connect view**: enter the server address (`address:port`, default
-   port is `5588`) and your name.
-   * **Host new room** uploads the level that is currently open in your editor. Leave the room
-     code empty to get a random one.
-   * **Join room** (everyone else): enter the code. Joining **replaces everything in your editor**
-     with the room's level, so open an empty level (or a copy) first.
-4. Once connected the window switches to the **room view**: the room code in big letters with a
-   **Copy** button (send it to your team), a progress bar while the level is uploaded / downloaded,
-   and the list of everybody in the room, each with their own icon and colours.
-   **Leave room** disconnects.
-5. While you are in a room, a small pill at the top of the editor shows `ROOM - N online` (or the
-   sync progress), and a short notification pops up whenever somebody joins or leaves.
+1. Run the server (see below) once, somewhere every player can reach, and enter its address in
+   the mod's **Config** (Geode -> Live Collab Editor -> settings, or the **Config** button in the
+   window). You only do this once. If you build the mod yourself you can bake the address in
+   (`kDefaultServer` in `src/Config.hpp`) so nobody has to type anything.
+2. In the editor press the small round **Collab** button (top right by default, move or hide it
+   in the Config) or the shortcut **F8**. The light on the button shows the state (grey = offline,
+   yellow = connecting, blue = syncing, green = live). The button sits in a corner, so the editor
+   stays fully usable.
+3. The window has two views:
+   * **Start party** - creates a new party from the level that is open in your editor and copies
+     the party code to your clipboard. Send that code to your friends.
+   * **Join a party** - paste the code a friend sent you and press **Join**. Joining **replaces
+     everything in your editor** with the party's level, so open an empty level (or a copy) first.
+   * No server address or port to type: the server comes from the Config. (If a host uses a
+     different server than yours, their party code looks like `ABCD2345@host:5588` and joining
+     with it switches to that server automatically.)
+4. Once you are in a party the window shows the code with a **Copy code** button, a progress bar
+   while the level is uploaded / downloaded, the list of everybody with their own icon and what
+   they have selected, an **Invite** box (type a friend's name) and **Leave room**.
+5. While you are in a party a small pill at the top of the editor shows the party and how many
+   people are online, other players' selections are outlined in their colour with a name tag, and
+   a short notification pops up when somebody joins or leaves.
+
+### Config
+
+| Setting | What it does |
+| --- | --- |
+| Party server | Address of the party server (`host` or `host:port`). Empty = the address built into the mod. |
+| Your name | Name the others see. Empty = your Geometry Dash account name. |
+| Button position / size | Corner of the editor (top/bottom, left/right) or hidden, and how big it is. |
+| Open Collab window | Shortcut (default F8). |
+| Copy the party code when starting | On by default. |
+| Show other players' selections | Outlines and name tags. |
+| Join and leave notifications | Short messages when people come and go. |
+| Receive invites | Stay connected to the server so friends can invite you by name. |
 
 ## Limitations (v1)
 
@@ -57,14 +77,19 @@ Options (environment variables): `PORT`, `HOST`, `DATA_DIR`, `MAX_CLIENTS_PER_RO
 `MAX_ROOMS`, `ROOM_TTL_DAYS`. Open the TCP port in your firewall / router, or use a TCP tunnel.
 `node test.js` runs the automated protocol test.
 
+For a server that is always on, run it on any VPS (or a host that exposes raw TCP ports, for
+example Fly.io) - `server/Dockerfile` is included. The mod speaks plain TCP, not HTTP, so hosts
+that only offer web services will not work. The server is the only thing that has to stay online;
+the mod itself needs no other infrastructure.
+
 ### Protocol (for the curious)
 
 One JSON message per line over TCP.
 
 | Direction | Message |
 | --- | --- |
-| client -> server | `hello` (`ver`, `mode` = `host`/`join`, `room`, `name`, optional `icon`, `c1`, `c2`, `glow`), `ready`, `snapshot` (`objs`), `snapshot_end`, `ops` (`ops`), `ping` |
-| server -> client | `welcome` (`id`, `room`, `empty`, `count`), `snapshot`, `snapshot_end`, `ops` (`from`, `ops`), `players` (`list` of `id`, `name`, `icon`, `c1`, `c2`, `glow`), `error` (`msg`), `pong` |
+| client -> server | `hello` (`ver`, `mode` = `host`/`join`/`lobby`, `room`, `name`, optional `icon`, `c1`, `c2`, `glow`), `ready`, `snapshot` (`objs`), `snapshot_end`, `ops` (`ops`), `sel` (`ids`, `n`), `invite` (`to`), `ping` |
+| server -> client | `welcome` (`id`, `room`, `empty`, `count`), `snapshot`, `snapshot_end`, `ops` (`from`, `ops`), `players` (`list` of `id`, `name`, `icon`, `c1`, `c2`, `glow`), `sel` (`from`, `ids`, `n`), `invite` (`from`, `room`), `invite_result` (`to`, `sent`, `reason`), `lobby`, `error` (`msg`), `pong` |
 
 An op is `["a", id, objectString]` (add), `["u", id, objectString]` (update) or `["d", id]` (delete).
 

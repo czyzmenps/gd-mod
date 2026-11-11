@@ -1,5 +1,7 @@
 #include "CollabPopup.hpp"
 
+#include "Config.hpp"
+
 #include <algorithm>
 
 using namespace geode::prelude;
@@ -82,6 +84,19 @@ CollabPopup* CollabPopup::create() {
     return nullptr;
 }
 
+CollabPopup::~CollabPopup() {
+    if (s_current == this) s_current = nullptr;
+}
+
+void CollabPopup::toggle() {
+    if (!Manager::get().inEditor()) return;
+    if (s_current) {
+        s_current->onClose(nullptr);
+        return;
+    }
+    if (auto popup = CollabPopup::create()) popup->show();
+}
+
 bool CollabPopup::init() {
     if (!Popup::init(kWidth, kHeight)) return false;
     this->setTitle("Live Collab");
@@ -93,6 +108,8 @@ bool CollabPopup::init() {
     this->refresh(0.f);
     this->schedule(schedule_selector(CollabPopup::refresh), 0.2f);
     this->schedule(schedule_selector(CollabPopup::animate));
+
+    s_current = this;
     return true;
 }
 
@@ -116,73 +133,73 @@ void CollabPopup::buildStatusRow() {
 }
 
 void CollabPopup::buildConnectView() {
-    auto* mod = Mod::get();
-
     m_connectView = makeLayer();
     m_mainLayer->addChildAtPosition(m_connectView, Anchor::Center);
 
-    // captions
-    auto caption = [this](char const* text, float x, float y) {
-        auto label = makeLabel(text, "bigFont.fnt", .33f, 190, { 0.f, .5f });
-        label->setPosition(at(x, y));
-        m_connectView->addChild(label);
-    };
-    caption("Server (address:port)", -155.f, 80.f);
-    caption("Your name", -155.f, 26.f);
-    caption("Room code", 5.f, 26.f);
-
-    // inputs (children of the main layer, like in every Geode popup)
-    m_serverInput = TextInput::create(310.f, "your.server.com:5588");
-    m_serverInput->setMaxCharCount(80);
-    m_serverInput->setString(mod->getSavedValue<std::string>("server", ""));
-    m_mainLayer->addChildAtPosition(m_serverInput, Anchor::Center, ccp(0.f, 58.f));
-
-    m_nameInput = TextInput::create(150.f, "Player");
-    m_nameInput->setMaxCharCount(20);
-    m_nameInput->setString(mod->getSavedValue<std::string>("name", ""));
-    m_mainLayer->addChildAtPosition(m_nameInput, Anchor::Center, ccp(-80.f, 4.f));
-
-    m_roomInput = TextInput::create(150.f, "ROOM CODE");
-    m_roomInput->setMaxCharCount(16);
-    m_roomInput->setCommonFilter(CommonFilter::Alphanumeric);
-    m_roomInput->setString(mod->getSavedValue<std::string>("room", ""));
-    m_mainLayer->addChildAtPosition(m_roomInput, Anchor::Center, ccp(80.f, 4.f));
-
-    // buttons: each one gets its own 150 px slot, so they can never overlap
-    m_hostBtn = makeButton(
-        "Host new room", "GJ_button_01.png", 150.f, .65f, this, menu_selector(CollabPopup::onHost)
+    // the one big button
+    m_startBtn = makeButton(
+        "Start party", "GJ_button_01.png", 240.f, .95f, this, menu_selector(CollabPopup::onStart)
     );
-    m_buttonMenu->addChildAtPosition(m_hostBtn, Anchor::Center, ccp(-80.f, -36.f));
+    m_buttonMenu->addChildAtPosition(m_startBtn, Anchor::Center, ccp(0.f, 58.f));
+
+    auto startNote = makeLabel(
+        "Creates a new party and copies its code for your friends", "chatFont.fnt", .5f, 170, { .5f, .5f }
+    );
+    fitLabel(startNote, 340.f, .5f);
+    startNote->setPosition(at(0.f, 28.f));
+    m_connectView->addChild(startNote);
+
+    // joining a friend's party
+    auto joinCaption = makeLabel("JOIN A PARTY", "bigFont.fnt", .3f, 160, { 0.f, .5f });
+    joinCaption->setPosition(at(-155.f, 4.f));
+    m_connectView->addChild(joinCaption);
+
+    m_codeInput = TextInput::create(220.f, "Party code");
+    m_codeInput->setMaxCharCount(90);
+    m_codeInput->setFilter("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@:.-_");
+    m_codeInput->setString(Manager::get().partyCode());
+    m_mainLayer->addChildAtPosition(m_codeInput, Anchor::Center, ccp(-45.f, -20.f));
 
     m_joinBtn = makeButton(
-        "Join room", "GJ_button_02.png", 150.f, .65f, this, menu_selector(CollabPopup::onJoin)
+        "Join", "GJ_button_02.png", 90.f, .75f, this, menu_selector(CollabPopup::onJoin)
     );
-    m_buttonMenu->addChildAtPosition(m_joinBtn, Anchor::Center, ccp(80.f, -36.f));
+    m_buttonMenu->addChildAtPosition(m_joinBtn, Anchor::Center, ccp(122.f, -20.f));
 
     // invites
     m_inviteToggle = CCMenuItemToggler::createWithStandardSprites(
         this, menu_selector(CollabPopup::onToggleInvites), .6f
     );
-    m_inviteToggle->toggle(mod->getSavedValue<bool>("invites", false));
-    m_buttonMenu->addChildAtPosition(m_inviteToggle, Anchor::Center, ccp(-160.f, -76.f));
+    m_inviteToggle->toggle(collab::cfg::flag("receive-invites"));
+    m_buttonMenu->addChildAtPosition(m_inviteToggle, Anchor::Center, ccp(-160.f, -58.f));
 
     auto toggleLabel = makeLabel("Receive invites", "bigFont.fnt", .35f, 230, { 0.f, .5f });
-    toggleLabel->setPosition(at(-142.f, -76.f));
+    toggleLabel->setPosition(at(-142.f, -58.f));
     m_connectView->addChild(toggleLabel);
 
     m_inviteStatus = makeLabel("", "chatFont.fnt", .5f, 220, { 0.f, .5f });
-    m_inviteStatus->setPosition(at(-155.f, -96.f));
+    m_inviteStatus->setPosition(at(-155.f, -77.f));
     m_connectView->addChild(m_inviteStatus);
 
-    // two hint lines at the bottom
-    auto hint = [this](char const* text, float y) {
-        auto label = makeLabel(text, "chatFont.fnt", .5f, 150, { .5f, .5f });
-        fitLabel(label, 350.f, .5f);
-        label->setPosition(at(0.f, y));
-        m_connectView->addChild(label);
-    };
-    hint("Host: uploads the level you have open right now.", -122.f);
-    hint("Join: replaces everything in this editor with the room's level.", -134.f);
+    // who you are and which server is used (both live in the Config)
+    m_nameLabel = makeLabel("", "chatFont.fnt", .55f, 230, { 0.f, .5f });
+    m_nameLabel->setPosition(at(-155.f, -104.f));
+    m_connectView->addChild(m_nameLabel);
+
+    m_serverLabel = makeLabel("", "chatFont.fnt", .5f, 200, { 0.f, .5f });
+    m_serverLabel->setPosition(at(-155.f, -120.f));
+    m_connectView->addChild(m_serverLabel);
+
+    m_configBtn = makeButton(
+        "Config", "GJ_button_04.png", 100.f, .6f, this, menu_selector(CollabPopup::onConfig)
+    );
+    m_buttonMenu->addChildAtPosition(m_configBtn, Anchor::Center, ccp(125.f, -112.f));
+
+    auto warning = makeLabel(
+        "Joining replaces everything in this editor with the party's level.", "chatFont.fnt", .45f, 140, { .5f, .5f }
+    );
+    fitLabel(warning, 350.f, .45f);
+    warning->setPosition(at(0.f, -140.f));
+    m_connectView->addChild(warning);
 }
 
 void CollabPopup::buildRoomView() {
@@ -190,7 +207,7 @@ void CollabPopup::buildRoomView() {
     m_mainLayer->addChildAtPosition(m_roomView, Anchor::Center);
 
     // room code card
-    auto caption = makeLabel("ROOM CODE", "bigFont.fnt", .3f, 160, { 0.f, .5f });
+    auto caption = makeLabel("PARTY CODE", "bigFont.fnt", .3f, 160, { 0.f, .5f });
     caption->setPosition(at(-150.f, 88.f));
     m_roomView->addChild(caption);
 
@@ -202,8 +219,12 @@ void CollabPopup::buildRoomView() {
     m_codeLabel->setPosition(at(-30.f, 64.f));
     m_roomView->addChild(m_codeLabel, 1);
 
+    m_serverNote = makeLabel("", "chatFont.fnt", .45f, 170, { 1.f, .5f });
+    m_serverNote->setPosition(at(170.f, 88.f));
+    m_roomView->addChild(m_serverNote);
+
     m_copyBtn = makeButton(
-        "Copy", "GJ_button_04.png", 80.f, .6f, this, menu_selector(CollabPopup::onCopy)
+        "Copy code", "GJ_button_04.png", 84.f, .6f, this, menu_selector(CollabPopup::onCopy)
     );
     m_buttonMenu->addChildAtPosition(m_copyBtn, Anchor::Center, ccp(135.f, 64.f));
 
@@ -302,27 +323,32 @@ CCNode* CollabPopup::makePlayerRow(collab::PlayerInfo const& player, bool isMe) 
 // actions
 // ----------------------------------------------------------------------
 
-void CollabPopup::saveSettings() {
-    auto* mod = Mod::get();
-    mod->setSavedValue<std::string>("server", static_cast<std::string>(m_serverInput->getString()));
-    mod->setSavedValue<std::string>("name", static_cast<std::string>(m_nameInput->getString()));
-}
-
 void CollabPopup::startConnection(bool host) {
     auto& manager = Manager::get();
     if (!manager.inEditor()) return;
 
-    this->saveSettings();
+    std::string server = collab::cfg::server();
+    std::string room;
 
-    std::string server = static_cast<std::string>(m_serverInput->getString());
-    std::string room = static_cast<std::string>(m_roomInput->getString());
-    std::string name = static_cast<std::string>(m_nameInput->getString());
+    if (!host) {
+        // a party code is "CODE", or "CODE@server" when the host uses their own server
+        std::string code = collab::cfg::trimmed(static_cast<std::string>(m_codeInput->getString()));
+        if (code.empty()) {
+            Notification::create("Type the party code your friend sent you", NotificationIcon::Warning, 2.f)->show();
+            return;
+        }
+        if (auto sep = code.find('@'); sep != std::string::npos) {
+            server = collab::cfg::trimmed(code.substr(sep + 1));
+            code = collab::cfg::trimmed(code.substr(0, sep));
+        }
+        room = code;
+    }
 
-    manager.connect(server, room, name, host);
+    manager.connect(server, room, collab::cfg::playerName(), host);
     this->refresh(0.f);
 }
 
-void CollabPopup::onHost(CCObject*) {
+void CollabPopup::onStart(CCObject*) {
     this->startConnection(true);
 }
 
@@ -338,8 +364,8 @@ void CollabPopup::onLeave(CCObject*) {
 void CollabPopup::onCopy(CCObject*) {
     auto const& room = Manager::get().room();
     if (room.empty()) return;
-    geode::utils::clipboard::write(room);
-    Notification::create("Room code copied", NotificationIcon::Success, 1.f)->show();
+    geode::utils::clipboard::write(Manager::get().partyCode());
+    Notification::create("Party code copied", NotificationIcon::Success, 1.f)->show();
 }
 
 void CollabPopup::onInvite(CCObject*) {
@@ -349,28 +375,17 @@ void CollabPopup::onInvite(CCObject*) {
 void CollabPopup::onToggleInvites(CCObject*) {
     // the toggler still reports the state from before the click
     bool const on = !m_inviteToggle->isToggled();
-
-    this->saveSettings();
-    Mod::get()->setSavedValue<bool>("invites", on);
-    Manager::get().setInvitesEnabled(
-        on,
-        static_cast<std::string>(m_serverInput->getString()),
-        static_cast<std::string>(m_nameInput->getString())
-    );
+    Mod::get()->setSettingValue<bool>("receive-invites", on);
+    Manager::get().refreshInviteSettings();
     this->refreshInviteStatus();
 }
 
-// closing the window is when edited server / name settings are picked up by the invite lobby
+void CollabPopup::onConfig(CCObject*) {
+    geode::openSettingsPopup(Mod::get());
+}
+
 void CollabPopup::onClose(CCObject* sender) {
-    auto& manager = Manager::get();
-    if (m_mode == 0) {
-        this->saveSettings();
-        std::string const server = static_cast<std::string>(m_serverInput->getString());
-        std::string const name = static_cast<std::string>(m_nameInput->getString());
-        if (manager.invitesEnabled() && (server != manager.inviteServer() || name != manager.inviteName())) {
-            manager.setInvitesEnabled(true, server, name);
-        }
-    }
+    if (s_current == this) s_current = nullptr;
     Popup::onClose(sender);
 }
 
@@ -383,14 +398,13 @@ void CollabPopup::showMode(bool offline) {
     if (mode == m_mode) return;
     m_mode = mode;
 
-    // connect view
+    // party view
     m_connectView->setVisible(offline);
-    for (auto* input : { m_serverInput, m_nameInput, m_roomInput }) {
-        input->setVisible(offline);
-        input->setEnabled(offline);
-    }
-    m_hostBtn->setVisible(offline);
+    m_codeInput->setVisible(offline);
+    m_codeInput->setEnabled(offline);
+    m_startBtn->setVisible(offline);
     m_joinBtn->setVisible(offline);
+    m_configBtn->setVisible(offline);
     m_inviteToggle->setVisible(offline);
 
     // room view
@@ -405,14 +419,15 @@ void CollabPopup::showMode(bool offline) {
     if (!offline) {
         // force everything in the room view to be redrawn
         m_shownCode.clear();
+        m_shownServerNote.clear();
         m_listSignature.clear();
         m_barPercent = -2;
         m_barPhase = 0.f;
     }
     else {
-        // keep the last room code handy for a quick rejoin
-        auto const& room = Manager::get().room();
-        if (!room.empty()) m_roomInput->setString(room);
+        // keep the last party code handy for a quick rejoin
+        auto const code = Manager::get().partyCode();
+        if (!code.empty()) m_codeInput->setString(code);
     }
 }
 
@@ -435,6 +450,31 @@ void CollabPopup::setStatusLine(std::string const& text, Status status, ccColor3
     m_statusDot->setPosition(at(start + 4.5f, kStatusY));
     m_statusLabel->setPosition(at(start + 17.f, kStatusY));
     m_statusPill->setContentSize({ std::max(130.f, group + 28.f) * 2.f, 44.f });
+}
+
+// "Playing as ..." and "Server: ..." (both come from the Config)
+void CollabPopup::refreshConnectInfo() {
+    std::string const name = "Playing as " + collab::cfg::playerName();
+    if (name != m_shownName) {
+        m_shownName = name;
+        m_nameLabel->setString(name.c_str());
+        fitLabel(m_nameLabel, 270.f, .55f);
+    }
+
+    std::string const server = collab::cfg::server();
+    std::string const text = server.empty()
+        ? "No party server set - press Config and enter it once"
+        : "Server: " + server;
+    if (text != m_shownServer) {
+        m_shownServer = text;
+        m_serverLabel->setString(text.c_str());
+        fitLabel(m_serverLabel, 250.f, .5f);
+        m_serverLabel->setColor(server.empty() ? ccColor3B { 255, 175, 110 } : ccColor3B { 170, 170, 170 });
+    }
+
+    // the switch can also be flipped in the Config while this window is open
+    bool const wanted = collab::cfg::flag("receive-invites");
+    if (m_inviteToggle->isToggled() != wanted) m_inviteToggle->toggle(wanted);
 }
 
 void CollabPopup::refreshInviteStatus() {
@@ -474,14 +514,9 @@ void CollabPopup::refresh(float) {
     this->setStatusLine(text, manager.status(), color);
 
     if (offline) {
+        this->refreshConnectInfo();
         this->refreshInviteStatus();
         return;
-    }
-
-    // remember the room so it is filled in next time
-    if (manager.room() != m_savedRoom) {
-        m_savedRoom = manager.room();
-        Mod::get()->setSavedValue<std::string>("room", m_savedRoom);
     }
     this->refreshRoomView();
 }
@@ -494,6 +529,14 @@ void CollabPopup::refreshRoomView() {
         m_shownCode = manager.room();
         m_codeLabel->setString(m_shownCode.c_str());
         fitLabel(m_codeLabel, 220.f, .85f);
+    }
+
+    // which server the party runs on
+    std::string const note = manager.server().empty() ? std::string() : "on " + manager.server();
+    if (note != m_shownServerNote) {
+        m_shownServerNote = note;
+        m_serverNote->setString(note.c_str());
+        fitLabel(m_serverNote, 190.f, .45f);
     }
 
     // line above the progress bar

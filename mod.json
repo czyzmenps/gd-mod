@@ -5,8 +5,71 @@
 	},
 	"id": "devcollab.live-editor",
 	"name": "Live Collab Editor",
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"developer": "Collab Dev",
-	"description": "Edit one level together in real time. Several players can join the same editor session and place, delete, move and edit objects at the same time.",
-	"tags": ["editor", "online", "utility"]
+	"description": "Start a party and build one level together in real time. Everybody in the party is in the same editor: you see each other's objects, selections and changes instantly.",
+	"tags": ["editor", "online", "utility"],
+	"settings": {
+		"server": {
+			"type": "string",
+			"name": "Party server",
+			"description": "Address of the party server, for example <cy>play.example.com</c> or <cy>play.example.com:5588</c> (the port is optional, 5588 by default). Everybody in a party has to use the same server. You only set this once. Leave it empty to use the server that is built into this version of the mod.",
+			"default": ""
+		},
+		"player-name": {
+			"type": "string",
+			"name": "Your name",
+			"description": "The name the other players see. Leave it empty to use your Geometry Dash account name.",
+			"default": ""
+		},
+		"button-position": {
+			"type": "string",
+			"name": "Button position",
+			"description": "Which corner of the editor the round Collab button sits in. <cy>Hidden</c> removes the button, you can still open the window with the shortcut below.",
+			"default": "Top right",
+			"one-of": ["Top right", "Top left", "Bottom right", "Bottom left", "Hidden"]
+		},
+		"button-size": {
+			"type": "float",
+			"name": "Button size",
+			"description": "How big the round Collab button is.",
+			"default": 1.0,
+			"min": 0.5,
+			"max": 1.6,
+			"control": {
+				"slider": true
+			}
+		},
+		"open-key": {
+			"type": "keybind",
+			"name": "Open Collab window",
+			"description": "Shortcut that opens (and closes) the Collab window while you are in the editor.",
+			"default": "F8",
+			"category": "editor"
+		},
+		"copy-code-on-start": {
+			"type": "bool",
+			"name": "Copy the party code when starting",
+			"description": "When you start a party, the code to send to your friends is copied to the clipboard automatically.",
+			"default": true
+		},
+		"show-selections": {
+			"type": "bool",
+			"name": "Show other players' selections",
+			"description": "Draw a coloured outline and a name tag around the objects the other players have selected.",
+			"default": true
+		},
+		"join-notifications": {
+			"type": "bool",
+			"name": "Join and leave notifications",
+			"description": "Show a short message when somebody enters or leaves your party.",
+			"default": true
+		},
+		"receive-invites": {
+			"type": "bool",
+			"name": "Receive invites",
+			"description": "While you are in the editor and not in a party, stay connected to the party server so friends can invite you by your name. Needs the server and your name to be set.",
+			"default": false
+		}
+	}
 }

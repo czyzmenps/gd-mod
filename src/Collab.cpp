@@ -1,4 +1,5 @@
 #include "Collab.hpp"
+#include "Config.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -61,7 +62,7 @@ namespace collab {
                 server = server.substr(0, colon);
             }
             if (server.empty()) {
-                error = "Enter the server address first";
+                error = "No party server set - press Config and enter it once";
                 return false;
             }
             if (port < 1 || port > 65535) {
@@ -70,6 +71,13 @@ namespace collab {
             }
             address = server;
             return true;
+        }
+
+        std::string normalizeServer(std::string const& server) {
+            std::string address, error;
+            int port = 5588;
+            if (!parseServer(server, address, port, error)) return "";
+            return fmt::format("{}:{}", address, port);
         }
 
         // luminance 0..255, used to avoid outlines that vanish on the dark editor background
@@ -116,13 +124,7 @@ namespace collab {
         m_status = Status::Offline;
         m_statusText = "Not connected";
 
-        // pick up the invite settings from the last time
-        auto* mod = Mod::get();
-        this->setInvitesEnabled(
-            mod->getSavedValue<bool>("invites", false),
-            mod->getSavedValue<std::string>("server", ""),
-            mod->getSavedValue<std::string>("name", "")
-        );
+        this->refreshInviteSettings();
     }
 
     void Manager::detach() {
@@ -140,6 +142,7 @@ namespace collab {
         this->clearTracking();
         m_hud.swap(nullptr);
         m_badge.swap(nullptr);
+        m_launcher.swap(nullptr);
         m_ui = nullptr;
         m_lel = nullptr;
         m_status = Status::Offline;
@@ -149,6 +152,30 @@ namespace collab {
     void Manager::setOverlay(SelectionOverlay* overlay) {
         m_overlay.swap(overlay);
         m_overlayShown = false;
+    }
+
+    void Manager::setLauncher(CollabLauncher* launcher) {
+        m_launcher.swap(launcher);
+        if (m_launcher) m_launcher->applySettings();
+    }
+
+    void Manager::onSettingChanged(std::string_view key) {
+        if (!m_ui) return;
+        if (key == "server" || key == "player-name" || key == "receive-invites") {
+            this->refreshInviteSettings();
+        }
+        else if (key == "button-position" || key == "button-size") {
+            if (m_launcher) m_launcher->applySettings();
+        }
+    }
+
+    std::string Manager::partyCode() const {
+        if (m_room.empty()) return "";
+        std::string const defaultServer = normalizeServer(std::string(cfg::kDefaultServer));
+        if (m_serverLabel.empty() || (!defaultServer.empty() && m_serverLabel == defaultServer)) {
+            return m_room;
+        }
+        return m_room + "@" + m_serverLabel;
     }
 
     void Manager::setHud(CollabHud* hud, CollabDot* badge) {
@@ -308,6 +335,11 @@ namespace collab {
             m_room = getStr(msg, "room", m_room);
             m_counter = 0;
             if (getBool(msg, "empty")) {
+                if (m_hosting && m_ui && cfg::flag("copy-code-on-start")) {
+                    geode::utils::clipboard::write(this->partyCode());
+                    std::string const text = fmt::format("Party {} started - code copied", m_room);
+                    Notification::create(text.c_str(), NotificationIcon::Success, 3.f)->show();
+                }
                 this->beginUpload();
             }
             else {
@@ -424,7 +456,7 @@ namespace collab {
 
     // Small toasts when somebody enters or leaves the room.
     void Manager::announcePlayers(std::vector<PlayerInfo> const& before) {
-        if (m_status != Status::Live || !m_ui) return;
+        if (m_status != Status::Live || !m_ui || !cfg::flag("join-notifications")) return;
 
         auto contains = [](std::vector<PlayerInfo> const& list, int id) {
             return std::any_of(list.begin(), list.end(), [id](PlayerInfo const& p) { return p.id == id; });
@@ -874,7 +906,7 @@ namespace collab {
         if (!m_overlay) return;
 
         bool const active = (m_status == Status::Live || m_status == Status::Syncing)
-            && !m_remoteSel.empty() && m_toClear.empty() && !this->isPlaytesting();
+            && cfg::flag("show-selections") && !m_remoteSel.empty() && m_toClear.empty() && !this->isPlaytesting();
         if (!active) {
             if (m_overlayShown) {
                 m_overlay->setEntries({});
@@ -944,11 +976,14 @@ namespace collab {
     // invites
     // ------------------------------------------------------------------
 
-    void Manager::setInvitesEnabled(bool enabled, std::string server, std::string name) {
-        m_lobbyWanted = enabled;
-        m_lobbyServer = trim(std::move(server));
-        name = trim(std::move(name));
-        if (name.size() > 20) name.resize(20);
+    void Manager::refreshInviteSettings() {
+        bool const wanted = cfg::flag("receive-invites");
+        std::string server = cfg::server();
+        std::string name = cfg::playerName();
+        if (wanted == m_lobbyWanted && server == m_lobbyServer && name == m_lobbyName) return;
+
+        m_lobbyWanted = wanted;
+        m_lobbyServer = std::move(server);
         m_lobbyName = std::move(name);
         m_lobbyError.clear();
         this->stopLobby();
@@ -956,7 +991,7 @@ namespace collab {
     }
 
     std::string Manager::inviteStatusText() const {
-        if (!m_lobbyWanted) return "Off - nobody can invite you";
+        if (!m_lobbyWanted) return "Off - friends can not invite you";
         switch (m_lobbyState) {
             case LobbyState::Listening: return fmt::format("Listening for invites as {}", m_lobbyName);
             case LobbyState::Connecting: return "Connecting to the server...";
@@ -967,11 +1002,6 @@ namespace collab {
     void Manager::startLobby() {
         std::string address, error;
         int port = 5588;
-        if (m_lobbyName.empty()) {
-            m_lobbyError = "Enter your name to receive invites";
-            m_lobbyRetry = 2.f;
-            return;
-        }
         if (!parseServer(m_lobbyServer, address, port, error)) {
             m_lobbyError = error;
             m_lobbyRetry = 2.f;

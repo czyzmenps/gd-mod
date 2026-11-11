@@ -3,6 +3,7 @@
 #include <Geode/Geode.hpp>
 
 #include "CollabHud.hpp"
+#include "CollabLauncher.hpp"
 #include "CollabOverlay.hpp"
 #include "Net.hpp"
 #include "Status.hpp"
@@ -58,6 +59,10 @@ namespace collab {
         void setHud(CollabHud* hud, CollabDot* badge);
         // draws the outlines of what the other players have selected
         void setOverlay(SelectionOverlay* overlay);
+        // the round button in the corner of the editor
+        void setLauncher(CollabLauncher* launcher);
+        // called when one of the mod's settings changed
+        void onSettingChanged(std::string_view key);
 
         // ---- used by the popup ----
         // mode is "host" (create a new room) or "join" (enter an existing room)
@@ -69,6 +74,9 @@ namespace collab {
         std::string const& statusText() const { return m_statusText; }
         std::string const& room() const { return m_room; }
         std::string const& server() const { return m_serverLabel; }
+        // what you send to your friends: the room code, plus "@server" when the
+        // friends could not know the server themselves
+        std::string partyCode() const;
         int clientId() const { return m_clientId; }
         // 0..1 while the level is being uploaded / downloaded, negative when unknown
         float progress() const;
@@ -79,12 +87,11 @@ namespace collab {
         SelectionInfo selectionOf(int playerId) const;
 
         // ---- invites ----
-        // Keeps a second connection to the server so other players can invite you
-        // by name. Needs the server address and your name.
-        void setInvitesEnabled(bool enabled, std::string server, std::string name);
+        // With "Receive invites" on in the Config, a second connection to the
+        // server lets other players invite you by name. Call this after the
+        // server, the name or that switch changed.
+        void refreshInviteSettings();
         bool invitesEnabled() const { return m_lobbyWanted; }
-        std::string const& inviteServer() const { return m_lobbyServer; }
-        std::string const& inviteName() const { return m_lobbyName; }
         std::string inviteStatusText() const;
         bool invitesListening() const { return m_lobbyState == LobbyState::Listening; }
         // asks the server to deliver an invite to this room to the player with that name
@@ -161,6 +168,7 @@ namespace collab {
         geode::Ref<CollabHud> m_hud;
         geode::Ref<CollabDot> m_badge;
         geode::Ref<SelectionOverlay> m_overlay;
+        geode::Ref<CollabLauncher> m_launcher;
 
         // connection state
         NetClient m_net;
