@@ -72,7 +72,7 @@ class FakeClient {
     end() { this.socket.destroy(); }
 }
 
-const hello = (mode, room, name) => ({ t: 'hello', ver: 1, mode, room, name });
+const hello = (mode, room, name, extra = {}) => ({ t: 'hello', ver: 1, mode, room, name, ...extra });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
@@ -83,7 +83,7 @@ async function main() {
     // --- host a room and upload a level ---
     const a = new FakeClient();
     await a.connect();
-    a.send(hello('host', 'testroom', 'Alice'));
+    a.send(hello('host', 'testroom', 'Alice', { icon: 7, c1: 5, c2: 12, glow: true }));
     const welcomeA = await a.nextType('welcome');
     assert.strictEqual(welcomeA.empty, true);
     assert.strictEqual(welcomeA.room, 'TESTROOM');
@@ -125,7 +125,7 @@ async function main() {
     // --- join and receive the snapshot ---
     const b = new FakeClient();
     await b.connect();
-    b.send(hello('join', 'testroom', 'Bob'));
+    b.send(hello('join', 'testroom', 'Bob', { icon: 99999, c1: -4, c2: 'x', glow: 'yes' }));
     const welcomeB = await b.nextType('welcome');
     assert.strictEqual(welcomeB.empty, false);
     assert.strictEqual(welcomeB.count, 3);
@@ -139,6 +139,11 @@ async function main() {
     const players = await a.next((m) => m.t === 'players' && m.list.length === 2);
     assert.deepStrictEqual(players.list.map((p) => p.name), ['Alice', 'Bob']);
     ok('both players see the player list');
+
+    const look = (p) => [p.icon, p.c1, p.c2, p.glow];
+    assert.deepStrictEqual(look(players.list[0]), [7, 5, 12, true]);
+    assert.deepStrictEqual(look(players.list[1]), [484, 0, 3, false]);
+    ok('player icons and colours are relayed, bad values are clamped');
 
     // --- live changes are relayed, but not echoed ---
     a.send({ t: 'ops', ops: [['a', '1.4', '1,1,2,90,3,0;'], ['u', '1.1', '1,1,2,5,3,5;'], ['d', '1.2']] });

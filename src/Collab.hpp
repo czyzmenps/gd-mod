@@ -2,7 +2,9 @@
 
 #include <Geode/Geode.hpp>
 
+#include "CollabHud.hpp"
 #include "Net.hpp"
+#include "Status.hpp"
 
 #include <chrono>
 #include <deque>
@@ -12,18 +14,13 @@
 
 namespace collab {
 
-    enum class Status {
-        Offline,    // not connected
-        Connecting, // TCP connect in progress
-        Joining,    // connected, waiting for the server to accept us
-        Confirm,    // waiting for the player to confirm replacing their level
-        Syncing,    // uploading / downloading the level
-        Live        // fully synced, changes flow both ways
-    };
-
     struct PlayerInfo {
         int id = 0;
         std::string name;
+        int icon = 1;  // cube icon id
+        int c1 = 0;    // primary colour index
+        int c2 = 3;    // secondary colour index
+        bool glow = false;
     };
 
     // One change coming from another player.
@@ -50,7 +47,8 @@ namespace collab {
         void detach();
         void tick(float dt);
         void onBeforeRemoveObject(GameObject* obj);
-        void setHud(cocos2d::CCLabelBMFont* label);
+        // the pill at the top of the editor and the light on the editor button
+        void setHud(CollabHud* hud, CollabDot* badge);
 
         // ---- used by the popup ----
         // mode is "host" (create a new room) or "join" (enter an existing room)
@@ -61,6 +59,10 @@ namespace collab {
         bool isOffline() const { return m_status == Status::Offline; }
         std::string const& statusText() const { return m_statusText; }
         std::string const& room() const { return m_room; }
+        std::string const& server() const { return m_serverLabel; }
+        int clientId() const { return m_clientId; }
+        // 0..1 while the level is being uploaded / downloaded, negative when unknown
+        float progress() const;
         std::vector<PlayerInfo> const& players() const { return m_players; }
         bool inEditor() const { return m_ui != nullptr; }
 
@@ -113,11 +115,14 @@ namespace collab {
         void scan();
 
         void updateHud();
+        std::string hudText() const;
+        void announcePlayers(std::vector<PlayerInfo> const& before);
 
         // editor state (raw pointers: valid between attach() and detach())
         EditorUI* m_ui = nullptr;
         LevelEditorLayer* m_lel = nullptr;
-        geode::Ref<cocos2d::CCLabelBMFont> m_hud;
+        geode::Ref<CollabHud> m_hud;
+        geode::Ref<CollabDot> m_badge;
 
         // connection state
         NetClient m_net;
@@ -125,6 +130,7 @@ namespace collab {
         std::string m_statusText = "Not connected";
         std::string m_room;
         std::string m_name;
+        std::string m_serverLabel;
         bool m_hosting = false;
         int m_clientId = 0;
         uint32_t m_counter = 0;
@@ -148,7 +154,6 @@ namespace collab {
         size_t m_uploadPos = 0;
         size_t m_downloaded = 0;
         size_t m_downloadTotal = 0;
-        std::string m_lastHud;
 
         // scanning
         float m_scanTimer = 0.f;

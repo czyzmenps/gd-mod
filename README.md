@@ -18,13 +18,20 @@ The mod talks to a small relay server (`server/`) that you run yourself.
 ## Using it
 
 1. Run the server (see below) somewhere every player can reach.
-2. In the editor click the **Collab** button on the left side of the screen.
-3. Enter the server address (`address:port`, default port is `5588`) and your name.
+2. In the editor click the **Collab** button on the left side of the screen. The small light on the
+   button shows the state (grey = offline, yellow = connecting, blue = syncing, green = live).
+3. The window starts in the **connect view**: enter the server address (`address:port`, default
+   port is `5588`) and your name.
    * **Host new room** uploads the level that is currently open in your editor. Leave the room
-     code empty to get a random one, then press **Copy code** and send it to your team.
+     code empty to get a random one.
    * **Join room** (everyone else): enter the code. Joining **replaces everything in your editor**
      with the room's level, so open an empty level (or a copy) first.
-4. The top of the screen shows `Collab <code> - N online` while you are connected.
+4. Once connected the window switches to the **room view**: the room code in big letters with a
+   **Copy** button (send it to your team), a progress bar while the level is uploaded / downloaded,
+   and the list of everybody in the room, each with their own icon and colours.
+   **Leave room** disconnects.
+5. While you are in a room, a small pill at the top of the editor shows `ROOM - N online` (or the
+   sync progress), and a short notification pops up whenever somebody joins or leaves.
 
 ## Limitations (v1)
 
@@ -56,8 +63,8 @@ One JSON message per line over TCP.
 
 | Direction | Message |
 | --- | --- |
-| client -> server | `hello` (`ver`, `mode` = `host`/`join`, `room`, `name`), `ready`, `snapshot` (`objs`), `snapshot_end`, `ops` (`ops`), `ping` |
-| server -> client | `welcome` (`id`, `room`, `empty`, `count`), `snapshot`, `snapshot_end`, `ops` (`from`, `ops`), `players` (`list`), `error` (`msg`), `pong` |
+| client -> server | `hello` (`ver`, `mode` = `host`/`join`, `room`, `name`, optional `icon`, `c1`, `c2`, `glow`), `ready`, `snapshot` (`objs`), `snapshot_end`, `ops` (`ops`), `ping` |
+| server -> client | `welcome` (`id`, `room`, `empty`, `count`), `snapshot`, `snapshot_end`, `ops` (`from`, `ops`), `players` (`list` of `id`, `name`, `icon`, `c1`, `c2`, `glow`), `error` (`msg`), `pong` |
 
 An op is `["a", id, objectString]` (add), `["u", id, objectString]` (update) or `["d", id]` (delete).
 

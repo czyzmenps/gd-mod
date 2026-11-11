@@ -146,6 +146,10 @@ class Client {
         this.socket = socket;
         this.id = 0;
         this.name = 'Player';
+        this.icon = 1;   // cube icon id
+        this.c1 = 0;     // primary colour index
+        this.c2 = 3;     // secondary colour index
+        this.glow = false;
         this.room = null;
         this.state = 'new'; // new -> awaiting_ready -> live
         this.buffer = '';
@@ -177,7 +181,9 @@ class Client {
 }
 
 function broadcastPlayers(room) {
-    const list = Array.from(room.clients.values()).map((c) => ({ id: c.id, name: c.name }));
+    const list = Array.from(room.clients.values()).map((c) => ({
+        id: c.id, name: c.name, icon: c.icon, c1: c.c1, c2: c.c2, glow: c.glow,
+    }));
     for (const c of room.clients.values()) c.send({ t: 'players', list });
 }
 
@@ -196,6 +202,12 @@ function leaveRoom(client) {
         return;
     }
     if (room.clients.size > 0) broadcastPlayers(room);
+}
+
+function clampInt(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
 function onHello(client, msg) {
@@ -230,6 +242,11 @@ function onHello(client, msg) {
 
     client.id = ++room.nextClientId;
     client.name = name;
+    // optional look of the player (shown in everybody's player list)
+    client.icon = clampInt(msg.icon, 1, 484, 1);
+    client.c1 = clampInt(msg.c1, 0, 255, 0);
+    client.c2 = clampInt(msg.c2, 0, 255, 3);
+    client.glow = msg.glow === true;
     client.room = room;
     client.state = host ? 'live' : 'awaiting_ready';
     room.clients.set(client.id, client);

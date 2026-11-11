@@ -45,24 +45,28 @@ class $modify(CollabEditorUI, EditorUI) {
             this->addChild(ticker);
         }
 
-        // small status line at the top of the screen
-        auto hud = CCLabelBMFont::create("", "chatFont.fnt");
-        hud->setScale(.5f);
-        hud->setOpacity(170);
-        hud->setAnchorPoint({ .5f, 1.f });
-        hud->setPosition({ winSize.width / 2.f, winSize.height - 3.f });
+        // pill at the top of the screen: [dot] ROOM - 3 online / sync progress
+        auto hud = collab::CollabHud::create();
+        hud->setPosition({ winSize.width / 2.f, winSize.height - 4.f });
         this->addChild(hud, 100);
-        collab::Manager::get().setHud(hud);
 
-        // the button that opens the collab window
+        // the button that opens the collab window, with a status light on it
         auto menu = CCMenu::create();
         menu->setPosition({ 0.f, 0.f });
         auto button = CCMenuItemSpriteExtra::create(
-            ButtonSprite::create("Collab", .6f), this, menu_selector(CollabEditorUI::onCollab)
+            ButtonSprite::create("Collab", "bigFont.fnt", "GJ_button_01.png", .6f),
+            this, menu_selector(CollabEditorUI::onCollab)
         );
         button->setPosition({ 42.f, winSize.height / 2.f + 30.f });
         menu->addChild(button);
         this->addChild(menu, 100);
+
+        auto badge = collab::CollabDot::create(4.f);
+        auto const size = button->getContentSize();
+        badge->setPosition(button->getPosition() + CCPoint { size.width / 2.f - 3.f, size.height / 2.f - 3.f });
+        this->addChild(badge, 101);
+
+        collab::Manager::get().setHud(hud, badge);
 
         return true;
     }

@@ -82,16 +82,16 @@ namespace collab {
         m_players.clear();
         this->clearTracking();
         m_hud.swap(nullptr);
-        m_lastHud.clear();
+        m_badge.swap(nullptr);
         m_ui = nullptr;
         m_lel = nullptr;
         m_status = Status::Offline;
         m_statusText = "Not connected";
     }
 
-    void Manager::setHud(cocos2d::CCLabelBMFont* label) {
-        m_hud.swap(label);
-        m_lastHud = "\x01"; // force the first refresh
+    void Manager::setHud(CollabHud* hud, CollabDot* badge) {
+        m_hud.swap(hud);
+        m_badge.swap(badge);
         this->updateHud();
     }
 
@@ -101,18 +101,33 @@ namespace collab {
         this->updateHud();
     }
 
+    float Manager::progress() const {
+        if (m_status != Status::Syncing) return -1.f;
+        if (m_uploading) {
+            if (m_uploadList.empty()) return -1.f;
+            return std::min(1.f, static_cast<float>(m_uploadPos) / static_cast<float>(m_uploadList.size()));
+        }
+        if (!m_toClear.empty() || m_downloadTotal == 0) return -1.f;
+        return std::min(1.f, static_cast<float>(m_downloaded) / static_cast<float>(m_downloadTotal));
+    }
+
+    std::string Manager::hudText() const {
+        switch (m_status) {
+            case Status::Offline: return "";
+            case Status::Live:
+                return fmt::format("{}  -  {} online", m_room, std::max<size_t>(1, m_players.size()));
+            case Status::Syncing: {
+                float const p = this->progress();
+                if (p < 0.f) return fmt::format("{}  -  syncing...", m_room);
+                return fmt::format("{}  -  syncing {}%", m_room, static_cast<int>(p * 100.f));
+            }
+            default: return m_statusText;
+        }
+    }
+
     void Manager::updateHud() {
-        if (!m_hud) return;
-        std::string text;
-        if (m_status != Status::Offline) {
-            text = fmt::format("Collab {} - {} online", m_room, std::max<size_t>(1, m_players.size()));
-            if (m_status == Status::Syncing) text += " (syncing)";
-            else if (m_status != Status::Live) text += " (connecting)";
-        }
-        if (text != m_lastHud) {
-            m_lastHud = text;
-            m_hud->setString(text.c_str());
-        }
+        if (m_hud) m_hud->setState(m_status, this->hudText(), this->progress());
+        if (m_badge) m_badge->setStatus(m_status);
     }
 
     // ------------------------------------------------------------------
@@ -174,6 +189,7 @@ namespace collab {
         m_hosting = host;
         m_room = room;
         m_name = name;
+        m_serverLabel = fmt::format("{}:{}", server, port);
         m_clientId = 0;
         m_counter = 0;
         m_pingTimer = 0.f;
@@ -207,12 +223,17 @@ namespace collab {
         switch (ev.type) {
             case NetEvent::Type::Connected: {
                 this->setStatus(Status::Joining, "Connected, entering the room...");
+                auto* gm = GameManager::get();
                 this->sendJson(matjson::makeObject({
                     {"t", "hello"},
                     {"ver", kProtocolVersion},
                     {"mode", m_hosting ? "host" : "join"},
                     {"room", m_room},
                     {"name", m_name},
+                    {"icon", gm->getPlayerFrame()},
+                    {"c1", gm->getPlayerColor()},
+                    {"c2", gm->getPlayerColor2()},
+                    {"glow", gm->getPlayerGlow()},
                 }));
             } break;
             case NetEvent::Type::Line: {
@@ -282,23 +303,49 @@ namespace collab {
             }
         }
         else if (type == "players") {
+            std::vector<PlayerInfo> before = std::move(m_players);
             m_players.clear();
             if (msg.contains("list") && msg["list"].isArray()) {
                 auto const& list = msg["list"];
                 for (size_t i = 0; i < list.size(); i++) {
                     auto const& p = at(list, i);
-                    m_players.push_back(PlayerInfo {
-                        static_cast<int>(getInt(p, "id")),
-                        getStr(p, "name", "?"),
-                    });
+                    PlayerInfo info;
+                    info.id = static_cast<int>(getInt(p, "id"));
+                    info.name = getStr(p, "name", "?");
+                    info.icon = static_cast<int>(std::clamp<int64_t>(getInt(p, "icon", 1), 1, 484));
+                    info.c1 = static_cast<int>(std::clamp<int64_t>(getInt(p, "c1", 0), 0, 255));
+                    info.c2 = static_cast<int>(std::clamp<int64_t>(getInt(p, "c2", 3), 0, 255));
+                    info.glow = getBool(p, "glow", false);
+                    m_players.push_back(std::move(info));
                 }
             }
+            this->announcePlayers(before);
             this->updateHud();
         }
         else if (type == "error") {
             this->disconnect(getStr(msg, "msg", "The server refused the connection"));
         }
         // "pong" and unknown messages are ignored
+    }
+
+    // Small toasts when somebody enters or leaves the room.
+    void Manager::announcePlayers(std::vector<PlayerInfo> const& before) {
+        if (m_status != Status::Live || !m_ui) return;
+
+        auto contains = [](std::vector<PlayerInfo> const& list, int id) {
+            return std::any_of(list.begin(), list.end(), [id](PlayerInfo const& p) { return p.id == id; });
+        };
+
+        for (auto const& p : m_players) {
+            if (p.id == m_clientId || contains(before, p.id)) continue;
+            std::string const text = fmt::format("{} joined the room", p.name);
+            Notification::create(text.c_str(), NotificationIcon::Success, 2.f)->show();
+        }
+        for (auto const& p : before) {
+            if (p.id == m_clientId || contains(m_players, p.id)) continue;
+            std::string const text = fmt::format("{} left the room", p.name);
+            Notification::create(text.c_str(), NotificationIcon::Info, 2.f)->show();
+        }
     }
 
     void Manager::askToReplaceLevel(int objectCount) {
