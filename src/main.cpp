@@ -68,6 +68,13 @@ class $modify(CollabEditorUI, EditorUI) {
 
         collab::Manager::get().setHud(hud, badge);
 
+        // outlines around what the other players have selected; z -1 keeps it
+        // below the editor's own buttons and panels
+        if (auto overlay = collab::SelectionOverlay::create()) {
+            this->addChild(overlay, -1);
+            collab::Manager::get().setOverlay(overlay);
+        }
+
         return true;
     }
 

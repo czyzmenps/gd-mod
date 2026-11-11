@@ -4,6 +4,7 @@
 #include <Geode/ui/ScrollLayer.hpp>
 
 #include <string>
+#include <unordered_map>
 
 #include "Collab.hpp"
 
@@ -30,6 +31,9 @@ protected:
     geode::TextInput* m_nameInput = nullptr;
     CCMenuItemSpriteExtra* m_hostBtn = nullptr;
     CCMenuItemSpriteExtra* m_joinBtn = nullptr;
+    CCMenuItemToggler* m_inviteToggle = nullptr;
+    cocos2d::CCLabelBMFont* m_inviteStatus = nullptr;
+    std::string m_shownInviteStatus;
 
     // ---- room view ----
     cocos2d::CCNode* m_roomView = nullptr;
@@ -40,6 +44,15 @@ protected:
     geode::ScrollLayer* m_list = nullptr;
     CCMenuItemSpriteExtra* m_copyBtn = nullptr;
     CCMenuItemSpriteExtra* m_leaveBtn = nullptr;
+    geode::TextInput* m_inviteInput = nullptr;
+    CCMenuItemSpriteExtra* m_inviteBtn = nullptr;
+
+    // the grey line under each player's name ("Selecting 3 objects")
+    struct SubtitleSlot {
+        cocos2d::CCLabelBMFont* label = nullptr;
+        std::string text;
+    };
+    std::unordered_map<int, SubtitleSlot> m_subtitles;
 
     // ---- state ----
     int m_mode = -1; // 0 = connect view, 1 = room view
@@ -60,12 +73,18 @@ protected:
     void setStatusLine(std::string const& text, collab::Status status, cocos2d::ccColor3B color);
     void refreshRoomView();
     void rebuildPlayerList();
+    void updateSubtitles();
+    void saveSettings();
+    void refreshInviteStatus();
     cocos2d::CCNode* makePlayerRow(collab::PlayerInfo const& player, bool isMe);
 
     void onHost(cocos2d::CCObject*);
     void onJoin(cocos2d::CCObject*);
     void onLeave(cocos2d::CCObject*);
     void onCopy(cocos2d::CCObject*);
+    void onInvite(cocos2d::CCObject*);
+    void onToggleInvites(cocos2d::CCObject*);
+    void onClose(cocos2d::CCObject*) override;
     void startConnection(bool host);
 
     void refresh(float dt);

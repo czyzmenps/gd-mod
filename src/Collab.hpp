@@ -3,6 +3,7 @@
 #include <Geode/Geode.hpp>
 
 #include "CollabHud.hpp"
+#include "CollabOverlay.hpp"
 #include "Net.hpp"
 #include "Status.hpp"
 
@@ -21,6 +22,12 @@ namespace collab {
         int c1 = 0;    // primary colour index
         int c2 = 3;    // secondary colour index
         bool glow = false;
+    };
+
+    // What a player has selected right now.
+    struct SelectionInfo {
+        size_t count = 0;
+        int objectId = -1; // GD object id, only filled in when exactly one object is selected
     };
 
     // One change coming from another player.
@@ -49,6 +56,8 @@ namespace collab {
         void onBeforeRemoveObject(GameObject* obj);
         // the pill at the top of the editor and the light on the editor button
         void setHud(CollabHud* hud, CollabDot* badge);
+        // draws the outlines of what the other players have selected
+        void setOverlay(SelectionOverlay* overlay);
 
         // ---- used by the popup ----
         // mode is "host" (create a new room) or "join" (enter an existing room)
@@ -65,6 +74,21 @@ namespace collab {
         float progress() const;
         std::vector<PlayerInfo> const& players() const { return m_players; }
         bool inEditor() const { return m_ui != nullptr; }
+
+        // what the given player (client id) has selected; works for yourself too
+        SelectionInfo selectionOf(int playerId) const;
+
+        // ---- invites ----
+        // Keeps a second connection to the server so other players can invite you
+        // by name. Needs the server address and your name.
+        void setInvitesEnabled(bool enabled, std::string server, std::string name);
+        bool invitesEnabled() const { return m_lobbyWanted; }
+        std::string const& inviteServer() const { return m_lobbyServer; }
+        std::string const& inviteName() const { return m_lobbyName; }
+        std::string inviteStatusText() const;
+        bool invitesListening() const { return m_lobbyState == LobbyState::Listening; }
+        // asks the server to deliver an invite to this room to the player with that name
+        void invite(std::string const& playerName);
 
         static std::string makeRoomCode();
 
@@ -116,6 +140,19 @@ namespace collab {
 
         void updateHud();
         std::string hudText() const;
+
+        // shared selection
+        void shareSelection();
+        void updateOverlay(float dt);
+        void clearSelections();
+
+        // invites
+        enum class LobbyState { Off, Connecting, Listening };
+        void tickLobby(float dt);
+        void startLobby();
+        void stopLobby();
+        void handleLobbyEvent(NetEvent const& ev);
+        void showInvite(std::string from, std::string room);
         void announcePlayers(std::vector<PlayerInfo> const& before);
 
         // editor state (raw pointers: valid between attach() and detach())
@@ -123,6 +160,7 @@ namespace collab {
         LevelEditorLayer* m_lel = nullptr;
         geode::Ref<CollabHud> m_hud;
         geode::Ref<CollabDot> m_badge;
+        geode::Ref<SelectionOverlay> m_overlay;
 
         // connection state
         NetClient m_net;
@@ -136,6 +174,30 @@ namespace collab {
         uint32_t m_counter = 0;
         std::vector<PlayerInfo> m_players;
         float m_pingTimer = 0.f;
+
+        // shared selection
+        struct RemoteSelection {
+            std::vector<std::string> ids;
+            size_t count = 0;
+        };
+        std::unordered_map<int, RemoteSelection> m_remoteSel;
+        std::string m_lastSelSig;
+        size_t m_mySelCount = 0;
+        std::string m_mySelFirst;
+        float m_overlayTimer = 0.f;
+        bool m_overlayShown = false;
+
+        // invites
+        NetClient m_lobby;
+        LobbyState m_lobbyState = LobbyState::Off;
+        bool m_lobbyWanted = false;
+        std::string m_lobbyServer;
+        std::string m_lobbyName;
+        std::string m_lobbyError;
+        float m_lobbyRetry = 0.f;
+        float m_lobbyPing = 0.f;
+        float m_inviteCooldown = 0.f; // > 0 while an invitation window is (probably) open
+        bool m_skipConfirm = false;   // the invitation window already warned about replacing the level
 
         // tracked objects
         std::unordered_map<GameObject*, ObjInfo> m_byObj;

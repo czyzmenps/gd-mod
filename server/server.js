@@ -26,12 +26,17 @@ const IDLE_TIMEOUT_MS = 60 * 1000;
 const MAX_LINE_BYTES = 32 * 1024 * 1024;
 const MAX_OBJECT_STRING = 256 * 1024;
 const SNAPSHOT_CHUNK = 250;
+const MAX_SELECTION = 300;      // object ids shared per selection
+const MAX_LOBBY = 500;          // clients waiting for invites
+const INVITE_COOLDOWN_MS = 1500;
 const PROTOCOL_VERSION = 1;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
+// clients that are connected but not in a room; they only wait for invites
+const lobby = new Set();
 
 function log(...args) {
     console.log(new Date().toISOString(), ...args);
@@ -151,7 +156,10 @@ class Client {
         this.c2 = 3;     // secondary colour index
         this.glow = false;
         this.room = null;
-        this.state = 'new'; // new -> awaiting_ready -> live
+        this.sel = [];       // object ids this player has selected
+        this.selCount = 0;   // how many objects are selected in total
+        this.lastInvite = 0;
+        this.state = 'new'; // new -> awaiting_ready -> live (or lobby)
         this.buffer = '';
         this.closed = false;
         this.timer = null;
@@ -210,16 +218,34 @@ function clampInt(value, min, max, fallback) {
     return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
+function cleanName(raw) {
+    return String(raw || 'Player').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 20) || 'Player';
+}
+
+// A client that is not in a room but wants to receive invites by name.
+function onLobbyHello(client, msg) {
+    if (lobby.size >= MAX_LOBBY && !lobby.has(client)) {
+        return client.error('Too many players are waiting for invites, try again later');
+    }
+    client.name = cleanName(msg.name);
+    client.state = 'lobby';
+    lobby.add(client);
+    log(`[lobby] ${client.name} is waiting for invites, ${lobby.size} in the lobby`);
+    client.send({ t: 'lobby', ok: true });
+}
+
 function onHello(client, msg) {
     if (client.room) return;
     if (msg.ver !== PROTOCOL_VERSION) {
         return client.error('Version mismatch: update the mod and the server to the same version');
     }
+    if (msg.mode === 'lobby') return onLobbyHello(client, msg);
+    lobby.delete(client);
     const code = String(msg.room || '').toUpperCase();
     if (!validCode(code)) {
         return client.error('Invalid room code (use 3-32 letters or digits)');
     }
-    const name = String(msg.name || 'Player').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 20) || 'Player';
+    const name = cleanName(msg.name);
     const host = msg.mode === 'host';
 
     let room;
@@ -273,6 +299,13 @@ function onReady(client) {
     if (chunk.length) client.send({ t: 'snapshot', objs: chunk });
     client.send({ t: 'snapshot_end' });
     client.state = 'live';
+
+    // show the newcomer what everybody else has selected right now
+    for (const other of room.clients.values()) {
+        if (other !== client && other.state === 'live' && other.sel.length > 0) {
+            client.send({ t: 'sel', from: other.id, ids: other.sel, n: other.selCount });
+        }
+    }
 }
 
 function onSnapshot(client, msg) {
@@ -322,6 +355,49 @@ function onOps(client, msg) {
     }
 }
 
+// The objects a player has selected, so the others can outline them.
+function onSel(client, msg) {
+    const room = client.room;
+    if (!room || room.loading || client.state !== 'live' || !Array.isArray(msg.ids)) return;
+
+    const ids = [];
+    for (const id of msg.ids) {
+        if (typeof id === 'string' && id.length > 0 && id.length < 64) ids.push(id);
+        if (ids.length >= MAX_SELECTION) break;
+    }
+    client.sel = ids;
+    client.selCount = Math.max(ids.length, clampInt(msg.n, 0, 100000000, ids.length));
+
+    const out = { t: 'sel', from: client.id, ids, n: client.selCount };
+    for (const other of room.clients.values()) {
+        if (other !== client && other.state === 'live') other.send(out);
+    }
+}
+
+// "Please join my room": delivered to everybody in the lobby with that name.
+function onInvite(client, msg) {
+    const room = client.room;
+    if (!room || room.loading || client.state !== 'live') return;
+    const target = typeof msg.to === 'string' ? msg.to.trim().toLowerCase() : '';
+    if (!target) return;
+
+    const now = Date.now();
+    if (now - client.lastInvite < INVITE_COOLDOWN_MS) {
+        return client.send({ t: 'invite_result', to: msg.to, sent: 0, reason: 'slow_down' });
+    }
+    client.lastInvite = now;
+
+    let sent = 0;
+    for (const other of lobby) {
+        if (other.name.toLowerCase() === target) {
+            other.send({ t: 'invite', from: client.name, room: room.code });
+            sent++;
+        }
+    }
+    log(`[${room.code}] ${client.name} invited "${msg.to}": ${sent} delivered`);
+    client.send({ t: 'invite_result', to: msg.to, sent });
+}
+
 function onMessage(client, msg) {
     switch (msg.t) {
         case 'hello': return onHello(client, msg);
@@ -329,6 +405,8 @@ function onMessage(client, msg) {
         case 'snapshot': return onSnapshot(client, msg);
         case 'snapshot_end': return onSnapshotEnd(client);
         case 'ops': return onOps(client, msg);
+        case 'sel': return onSel(client, msg);
+        case 'invite': return onInvite(client, msg);
         case 'ping': return client.send({ t: 'pong' });
         default: return; // ignore unknown messages
     }
@@ -369,6 +447,7 @@ const server = net.createServer((socket) => {
         if (client.closed) return;
         client.closed = true;
         clearTimeout(client.timer);
+        lobby.delete(client);
         leaveRoom(client);
     };
     socket.on('close', cleanup);

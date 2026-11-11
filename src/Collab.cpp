@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <random>
 #include <unordered_set>
 
@@ -39,6 +40,50 @@ namespace collab {
             s.erase(std::find_if(s.rbegin(), s.rend(), notSpace).base(), s.end());
             return s;
         }
+
+        // "tcp://example.com:5588/" -> address "example.com", port 5588 (default 5588)
+        bool parseServer(std::string server, std::string& address, int& port, std::string& error) {
+            server = trim(server);
+            if (auto pos = server.find("://"); pos != std::string::npos) {
+                server = server.substr(pos + 3);
+            }
+            while (!server.empty() && server.back() == '/') server.pop_back();
+
+            port = 5588;
+            if (auto colon = server.rfind(':'); colon != std::string::npos && server.find(':') == colon) {
+                try {
+                    port = std::stoi(server.substr(colon + 1));
+                }
+                catch (...) {
+                    error = "The port in the server address is not a number";
+                    return false;
+                }
+                server = server.substr(0, colon);
+            }
+            if (server.empty()) {
+                error = "Enter the server address first";
+                return false;
+            }
+            if (port < 1 || port > 65535) {
+                error = "The port must be between 1 and 65535";
+                return false;
+            }
+            address = server;
+            return true;
+        }
+
+        // luminance 0..255, used to avoid outlines that vanish on the dark editor background
+        int brightness(ccColor3B c) {
+            return (c.r * 299 + c.g * 587 + c.b * 114) / 1000;
+        }
+
+        // GD tag characters would break the text of a popup
+        std::string plain(std::string s) {
+            for (auto& c : s) {
+                if (c == '<' || c == '>') c = '?';
+            }
+            return s;
+        }
     }
 
     Manager& Manager::get() {
@@ -70,10 +115,22 @@ namespace collab {
         m_lel = layer;
         m_status = Status::Offline;
         m_statusText = "Not connected";
+
+        // pick up the invite settings from the last time
+        auto* mod = Mod::get();
+        this->setInvitesEnabled(
+            mod->getSavedValue<bool>("invites", false),
+            mod->getSavedValue<std::string>("server", ""),
+            mod->getSavedValue<std::string>("name", "")
+        );
     }
 
     void Manager::detach() {
         m_net.close();
+        m_lobbyWanted = false;
+        this->stopLobby();
+        this->clearSelections();
+        m_overlay.swap(nullptr);
         m_remote.clear();
         m_out.clear();
         m_toClear.clear();
@@ -87,6 +144,11 @@ namespace collab {
         m_lel = nullptr;
         m_status = Status::Offline;
         m_statusText = "Not connected";
+    }
+
+    void Manager::setOverlay(SelectionOverlay* overlay) {
+        m_overlay.swap(overlay);
+        m_overlayShown = false;
     }
 
     void Manager::setHud(CollabHud* hud, CollabDot* badge) {
@@ -137,35 +199,19 @@ namespace collab {
     void Manager::connect(std::string server, std::string room, std::string name, bool host) {
         if (!m_ui || m_status != Status::Offline) return;
 
-        server = trim(server);
         room = trim(room);
         name = trim(name);
 
-        // strip a scheme like tcp:// if somebody pasted one
-        if (auto pos = server.find("://"); pos != std::string::npos) {
-            server = server.substr(pos + 3);
-        }
-        while (!server.empty() && server.back() == '/') server.pop_back();
-
+        std::string address;
         int port = 5588;
-        if (auto colon = server.rfind(':'); colon != std::string::npos && server.find(':') == colon) {
-            try {
-                port = std::stoi(server.substr(colon + 1));
-            }
-            catch (...) {
-                this->setStatus(Status::Offline, "The port in the server address is not a number");
+        {
+            std::string error;
+            if (!parseServer(server, address, port, error)) {
+                this->setStatus(Status::Offline, error);
                 return;
             }
-            server = server.substr(0, colon);
         }
-        if (server.empty()) {
-            this->setStatus(Status::Offline, "Enter the server address first");
-            return;
-        }
-        if (port < 1 || port > 65535) {
-            this->setStatus(Status::Offline, "The port must be between 1 and 65535");
-            return;
-        }
+        server = address;
         if (!host && room.empty()) {
             this->setStatus(Status::Offline, "Enter the room code you want to join");
             return;
@@ -177,6 +223,8 @@ namespace collab {
         if (name.empty()) name = "Player";
         if (name.size() > 20) name.resize(20);
 
+        this->stopLobby();
+
         m_remote.clear();
         m_out.clear();
         m_toClear.clear();
@@ -185,6 +233,7 @@ namespace collab {
         m_snapshotDone = false;
         m_players.clear();
         this->clearTracking();
+        this->clearSelections();
 
         m_hosting = host;
         m_room = room;
@@ -211,8 +260,11 @@ namespace collab {
         m_uploadList.clear();
         m_uploading = false;
         m_players.clear();
+        m_skipConfirm = false;
         this->clearTracking();
+        this->clearSelections();
         this->setStatus(Status::Offline, reason);
+        m_lobbyRetry = 1.f; // come back to the invite lobby shortly
     }
 
     void Manager::sendJson(matjson::Value const& msg) {
@@ -319,8 +371,50 @@ namespace collab {
                     m_players.push_back(std::move(info));
                 }
             }
+            // selections of players that are gone
+            for (auto it = m_remoteSel.begin(); it != m_remoteSel.end();) {
+                int const id = it->first;
+                bool const present = std::any_of(m_players.begin(), m_players.end(), [id](PlayerInfo const& p) {
+                    return p.id == id;
+                });
+                it = present ? std::next(it) : m_remoteSel.erase(it);
+            }
             this->announcePlayers(before);
             this->updateHud();
+        }
+        else if (type == "sel") {
+            if (m_status != Status::Syncing && m_status != Status::Live) return;
+            int const from = static_cast<int>(getInt(msg, "from"));
+            if (from <= 0 || from == m_clientId) return;
+
+            RemoteSelection sel;
+            if (msg.contains("ids") && msg["ids"].isArray()) {
+                auto const& ids = msg["ids"];
+                for (size_t i = 0; i < ids.size() && i < 300; i++) {
+                    std::string id = at(ids, i).asString().unwrapOr("");
+                    if (!id.empty()) sel.ids.push_back(std::move(id));
+                }
+            }
+            sel.count = std::max<size_t>(sel.ids.size(), static_cast<size_t>(std::max<int64_t>(0, getInt(msg, "n"))));
+            if (sel.count == 0) m_remoteSel.erase(from);
+            else m_remoteSel[from] = std::move(sel);
+        }
+        else if (type == "invite_result") {
+            if (!m_ui) return;
+            std::string const to = plain(getStr(msg, "to"));
+            if (getInt(msg, "sent") > 0) {
+                std::string const text = fmt::format("Invite sent to {}", to);
+                Notification::create(text.c_str(), NotificationIcon::Success, 2.f)->show();
+            }
+            else if (getStr(msg, "reason") == "slow_down") {
+                Notification::create("Wait a moment before sending another invite", NotificationIcon::Warning, 2.f)->show();
+            }
+            else {
+                std::string const text = fmt::format(
+                    "{} is not waiting for invites. They need to be on this server with \"Receive invites\" switched on.", to
+                );
+                Notification::create(text.c_str(), NotificationIcon::Warning, 4.f)->show();
+            }
         }
         else if (type == "error") {
             this->disconnect(getStr(msg, "msg", "The server refused the connection"));
@@ -349,6 +443,12 @@ namespace collab {
     }
 
     void Manager::askToReplaceLevel(int objectCount) {
+        if (m_skipConfirm) {
+            // the invitation window already asked
+            m_skipConfirm = false;
+            this->beginDownload();
+            return;
+        }
         this->setStatus(Status::Confirm, "Waiting for your confirmation...");
         createQuickPopup(
             "Join room",
@@ -698,7 +798,298 @@ namespace collab {
             this->reconcile();
         }
         this->scanSelection();
+        this->shareSelection();
         this->scanSweep();
+    }
+
+    // ------------------------------------------------------------------
+    // shared selection
+    // ------------------------------------------------------------------
+
+    void Manager::clearSelections() {
+        m_remoteSel.clear();
+        m_lastSelSig.clear();
+        m_mySelCount = 0;
+        m_mySelFirst.clear();
+        m_overlayTimer = 0.f;
+        if (m_overlay && m_overlayShown) m_overlay->setEntries({});
+        m_overlayShown = false;
+    }
+
+    // Tells the others which objects we have selected (only when it changed).
+    void Manager::shareSelection() {
+        constexpr size_t kMaxShared = 300;
+
+        std::vector<std::string> ids;
+        size_t total = 0;
+        if (auto* selected = m_ui->getSelectedObjects()) {
+            for (unsigned int i = 0; i < selected->count(); i++) {
+                auto* obj = typeinfo_cast<GameObject*>(selected->objectAtIndex(i));
+                if (!obj) continue;
+                total++;
+                if (ids.size() >= kMaxShared) continue;
+                if (auto it = m_byObj.find(obj); it != m_byObj.end()) ids.push_back(it->second.id);
+            }
+        }
+
+        std::string sig;
+        for (auto const& id : ids) {
+            sig += id;
+            sig.push_back(',');
+        }
+        sig += fmt::format("#{}", total);
+        if (sig == m_lastSelSig) return;
+        m_lastSelSig = std::move(sig);
+        m_mySelCount = total;
+        m_mySelFirst = ids.empty() ? std::string() : ids.front();
+
+        auto arr = matjson::Value::array();
+        for (auto const& id : ids) arr.push(id);
+        this->sendJson(matjson::makeObject({
+            {"t", "sel"},
+            {"ids", std::move(arr)},
+            {"n", static_cast<int>(total)},
+        }));
+    }
+
+    SelectionInfo Manager::selectionOf(int playerId) const {
+        SelectionInfo info;
+        std::string first;
+        if (playerId == m_clientId) {
+            info.count = m_mySelCount;
+            first = m_mySelFirst;
+        }
+        else if (auto it = m_remoteSel.find(playerId); it != m_remoteSel.end()) {
+            info.count = it->second.count;
+            if (!it->second.ids.empty()) first = it->second.ids.front();
+        }
+        if (info.count == 1 && !first.empty()) {
+            if (GameObject* obj = this->findById(first)) info.objectId = obj->m_objectID;
+        }
+        return info;
+    }
+
+    // Outlines the objects other players have selected.
+    void Manager::updateOverlay(float dt) {
+        if (!m_overlay) return;
+
+        bool const active = (m_status == Status::Live || m_status == Status::Syncing)
+            && !m_remoteSel.empty() && m_toClear.empty() && !this->isPlaytesting();
+        if (!active) {
+            if (m_overlayShown) {
+                m_overlay->setEntries({});
+                m_overlayShown = false;
+            }
+            return;
+        }
+
+        m_overlayTimer += dt;
+        if (m_overlayTimer < .1f) return;
+        m_overlayTimer = 0.f;
+
+        auto* gm = GameManager::get();
+        auto const winSize = CCDirector::get()->getWinSize();
+        size_t budget = 400; // boxes drawn in total
+
+        std::vector<OverlayEntry> entries;
+        for (auto const& [playerId, sel] : m_remoteSel) {
+            int const wantedId = playerId; // (structured bindings can not be captured portably)
+            auto player = std::find_if(m_players.begin(), m_players.end(), [wantedId](PlayerInfo const& p) {
+                return p.id == wantedId;
+            });
+            if (player == m_players.end()) continue;
+
+            OverlayEntry entry;
+            entry.playerId = playerId;
+            entry.label = sel.count == 1 ? player->name : fmt::format("{} - {}", player->name, sel.count);
+
+            // the player's own colour, unless it would vanish on the dark background
+            ccColor3B color = gm->colorForIdx(player->c1);
+            if (brightness(color) < 70) color = gm->colorForIdx(player->c2);
+            if (brightness(color) < 70) color = ccColor3B { 255, 255, 255 };
+            entry.color = color;
+
+            for (auto const& id : sel.ids) {
+                if (budget == 0) break;
+                GameObject* obj = this->findById(id);
+                if (!obj) continue;
+                auto* parent = obj->getParent();
+                if (!parent) continue;
+
+                CCRect const rect = obj->getObjectRect();
+                float const w = std::max(rect.size.width, 8.f);
+                float const h = std::max(rect.size.height, 8.f);
+                CCPoint const a = m_overlay->convertToNodeSpace(
+                    parent->convertToWorldSpace(ccp(rect.getMinX(), rect.getMinY()))
+                );
+                CCPoint const b = m_overlay->convertToNodeSpace(
+                    parent->convertToWorldSpace(ccp(rect.getMinX() + w, rect.getMinY() + h))
+                );
+                CCRect const box(std::min(a.x, b.x), std::min(a.y, b.y), std::abs(b.x - a.x), std::abs(b.y - a.y));
+
+                // skip what is not on screen
+                if (box.getMaxX() < -20.f || box.getMinX() > winSize.width + 20.f) continue;
+                if (box.getMaxY() < -20.f || box.getMinY() > winSize.height + 20.f) continue;
+
+                entry.boxes.push_back(box);
+                budget--;
+            }
+            if (!entry.boxes.empty()) entries.push_back(std::move(entry));
+        }
+        m_overlay->setEntries(entries);
+        m_overlayShown = true;
+    }
+
+    // ------------------------------------------------------------------
+    // invites
+    // ------------------------------------------------------------------
+
+    void Manager::setInvitesEnabled(bool enabled, std::string server, std::string name) {
+        m_lobbyWanted = enabled;
+        m_lobbyServer = trim(std::move(server));
+        name = trim(std::move(name));
+        if (name.size() > 20) name.resize(20);
+        m_lobbyName = std::move(name);
+        m_lobbyError.clear();
+        this->stopLobby();
+        m_lobbyRetry = 0.f;
+    }
+
+    std::string Manager::inviteStatusText() const {
+        if (!m_lobbyWanted) return "Off - nobody can invite you";
+        switch (m_lobbyState) {
+            case LobbyState::Listening: return fmt::format("Listening for invites as {}", m_lobbyName);
+            case LobbyState::Connecting: return "Connecting to the server...";
+            default: return m_lobbyError.empty() ? std::string("Waiting to connect...") : m_lobbyError;
+        }
+    }
+
+    void Manager::startLobby() {
+        std::string address, error;
+        int port = 5588;
+        if (m_lobbyName.empty()) {
+            m_lobbyError = "Enter your name to receive invites";
+            m_lobbyRetry = 2.f;
+            return;
+        }
+        if (!parseServer(m_lobbyServer, address, port, error)) {
+            m_lobbyError = error;
+            m_lobbyRetry = 2.f;
+            return;
+        }
+        m_lobbyError.clear();
+        m_lobbyState = LobbyState::Connecting;
+        m_lobbyPing = 0.f;
+        m_lobby.connect(address, port);
+    }
+
+    void Manager::stopLobby() {
+        m_lobby.close();
+        (void)m_lobby.poll(); // drop whatever the old connection still had queued
+        m_lobbyState = LobbyState::Off;
+    }
+
+    void Manager::tickLobby(float dt) {
+        if (m_inviteCooldown > 0.f) m_inviteCooldown -= dt;
+
+        for (auto const& ev : m_lobby.poll()) {
+            this->handleLobbyEvent(ev);
+        }
+
+        // the lobby is only open while we are not in a room
+        if (!m_lobbyWanted || m_status != Status::Offline) {
+            if (m_lobbyState != LobbyState::Off) this->stopLobby();
+            return;
+        }
+
+        if (m_lobbyState == LobbyState::Off) {
+            m_lobbyRetry -= dt;
+            if (m_lobbyRetry <= 0.f) this->startLobby();
+        }
+        else if (m_lobbyState == LobbyState::Listening) {
+            m_lobbyPing += dt;
+            if (m_lobbyPing >= 10.f) {
+                m_lobbyPing = 0.f;
+                m_lobby.send(matjson::makeObject({{"t", "ping"}}).dump(matjson::NO_INDENTATION));
+            }
+        }
+    }
+
+    void Manager::handleLobbyEvent(NetEvent const& ev) {
+        switch (ev.type) {
+            case NetEvent::Type::Connected: {
+                m_lobby.send(matjson::makeObject({
+                    {"t", "hello"},
+                    {"ver", kProtocolVersion},
+                    {"mode", "lobby"},
+                    {"name", m_lobbyName},
+                }).dump(matjson::NO_INDENTATION));
+            } break;
+            case NetEvent::Type::Line: {
+                auto parsed = matjson::Value::parse(ev.text);
+                if (parsed.isErr()) return;
+                matjson::Value const& msg = parsed.unwrap();
+                std::string const type = getStr(msg, "t");
+                if (type == "lobby") {
+                    m_lobbyState = LobbyState::Listening;
+                    m_lobbyError.clear();
+                }
+                else if (type == "invite") {
+                    this->showInvite(plain(getStr(msg, "from", "Somebody")), getStr(msg, "room"));
+                }
+                else if (type == "error") {
+                    std::string err = getStr(msg, "msg", "The server refused the connection");
+                    // servers from before invites existed treat "lobby" like a room join
+                    if (err.find("Invalid room code") != std::string::npos) {
+                        err = "This server is too old for invites - update server.js";
+                    }
+                    this->stopLobby();
+                    m_lobbyError = std::move(err);
+                    m_lobbyRetry = 20.f;
+                }
+            } break;
+            case NetEvent::Type::Closed: {
+                m_lobbyState = LobbyState::Off;
+                m_lobbyError = ev.text;
+                m_lobbyRetry = 8.f;
+            } break;
+        }
+    }
+
+    void Manager::showInvite(std::string from, std::string room) {
+        if (!m_ui || m_status != Status::Offline || m_inviteCooldown > 0.f || room.empty()) return;
+        m_inviteCooldown = 30.f; // at most one invitation window at a time
+
+        createQuickPopup(
+            "Invitation",
+            fmt::format(
+                "<cy>{}</c> invited you to the room <cg>{}</c>.\n\n"
+                "Joining <cr>deletes everything in this editor</c> and loads the room's level instead. "
+                "Save a copy of your level first if you want to keep it!",
+                from, plain(room)
+            ),
+            "Decline", "Join",
+            [room](FLAlertLayer*, bool join) {
+                auto& self = Manager::get();
+                self.m_inviteCooldown = 0.f;
+                if (!join || !self.m_ui || self.m_status != Status::Offline) return;
+                self.m_skipConfirm = true;
+                self.connect(self.m_lobbyServer, room, self.m_lobbyName, false);
+            }
+        );
+    }
+
+    void Manager::invite(std::string const& playerName) {
+        std::string const target = trim(playerName);
+        if (m_status != Status::Live) {
+            Notification::create("Invites can be sent once the room is live", NotificationIcon::Warning, 2.f)->show();
+            return;
+        }
+        if (target.empty()) {
+            Notification::create("Type the name of the player you want to invite", NotificationIcon::Warning, 2.f)->show();
+            return;
+        }
+        this->sendJson(matjson::makeObject({{"t", "invite"}, {"to", target}}));
     }
 
     // ------------------------------------------------------------------
@@ -729,9 +1120,11 @@ namespace collab {
     void Manager::tick(float dt) {
         if (!m_ui || !m_lel) return;
 
+        this->tickLobby(dt);
         for (auto const& ev : m_net.poll()) {
             this->handleEvent(ev);
         }
+        this->updateOverlay(dt);
         if (m_status == Status::Offline) return;
 
         m_pingTimer += dt;

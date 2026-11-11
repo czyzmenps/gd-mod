@@ -166,6 +166,26 @@ async function main() {
     await a.nextType('pong');
     ok('malformed ops are ignored');
 
+    // --- shared selections ---
+    a.send({ t: 'sel', ids: ['1.1', '1.4', 5, '', 'x'.repeat(100)], n: 7 });
+    const selB = await b.nextType('sel');
+    assert.strictEqual(selB.from, 1);
+    assert.deepStrictEqual(selB.ids, ['1.1', '1.4']);
+    assert.strictEqual(selB.n, 7);
+    a.send({ t: 'ping' });
+    await a.nextType('pong');
+    assert.ok(!a.messages.some((m) => m.t === 'sel'), 'selection must not be echoed back');
+    ok('a selection is relayed to the others (not echoed), junk ids are dropped');
+
+    b.send({ t: 'sel', ids: Array.from({ length: 1000 }, (_, i) => `2.${i}`), n: 1000 });
+    const selBig = await a.nextType('sel');
+    assert.strictEqual(selBig.ids.length, 300);
+    assert.strictEqual(selBig.n, 1000);
+    b.send({ t: 'sel', ids: [], n: 0 });
+    const selClear = await a.nextType('sel');
+    assert.deepStrictEqual(selClear.ids, []);
+    ok('huge selections are capped, the real count is kept, clearing works');
+
     // --- a third player joining mid-session gets the *current* level ---
     const c = new FakeClient();
     await c.connect();
@@ -178,6 +198,48 @@ async function main() {
     assert.strictEqual(snapC.objs.find((o) => o[0] === '1.1')[1], '1,1,2,5,3,5;');
     await c.nextType('snapshot_end');
     ok('late joiner gets the up-to-date level');
+
+    const selC = await c.nextType('sel');
+    assert.strictEqual(selC.from, 1);
+    assert.deepStrictEqual(selC.ids, ['1.1', '1.4']);
+    ok('late joiner is told what others have selected');
+
+    // --- invites ---
+    const z = new FakeClient();
+    await z.connect();
+    z.send({ t: 'hello', ver: 1, mode: 'lobby', name: 'Zed' });
+    assert.strictEqual((await z.nextType('lobby')).ok, true);
+
+    a.send({ t: 'invite', to: ' zed ' });
+    const inv = await z.nextType('invite');
+    assert.deepStrictEqual([inv.from, inv.room], ['Alice', 'TESTROOM']);
+    assert.strictEqual((await a.nextType('invite_result')).sent, 1);
+    ok('an invite reaches the lobby player with that name (case-insensitive)');
+
+    a.send({ t: 'invite', to: 'Zed' });
+    const slow = await a.nextType('invite_result');
+    assert.deepStrictEqual([slow.sent, slow.reason], [0, 'slow_down']);
+    ok('invites are rate limited');
+
+    await sleep(1700);
+    a.send({ t: 'invite', to: 'Nobody' });
+    assert.strictEqual((await a.nextType('invite_result')).sent, 0);
+    ok('inviting somebody who is not waiting reports 0 delivered');
+
+    z.send({ t: 'invite', to: 'Alice' });
+    z.send({ t: 'ops', ops: [['a', '9.9', '1,1;']] });
+    z.send({ t: 'ping' });
+    await z.nextType('pong');
+    ok('a lobby player cannot invite or edit');
+
+    z.send(hello('join', 'TESTROOM', 'Zed'));
+    await z.nextType('welcome');
+    await sleep(1700);
+    a.send({ t: 'invite', to: 'Zed' });
+    assert.strictEqual((await a.nextType('invite_result')).sent, 0);
+    ok('a player who joined a room leaves the lobby');
+    z.end();
+    await sleep(150);
 
     // --- leaving updates the player list ---
     b.end();
@@ -202,7 +264,9 @@ async function main() {
     ok('room survives a server restart and client ids are not reused');
 
     d.end();
+    const exited = new Promise((resolve) => server.once('exit', resolve));
     server.kill('SIGTERM');
+    await exited; // the server writes the rooms to disk while shutting down
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     console.log(`\nAll ${passed} checks passed`);
 }
